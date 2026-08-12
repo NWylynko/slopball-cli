@@ -1,0 +1,11 @@
+# The box image is built from THIS module as its context (plan 49 step 3), so
+# the exclusions the monorepo's .dockerignore used to provide have to exist here
+# too — they stopped applying the moment the context stopped being the repo root.
+.git
+# The bundled git archives are fetched and checksum-verified inside the build
+# stage. A local copy in the context is reused only when it matches the pinned
+# sha256, so shipping ~50MB of them into every build is pure cost.
+git/bundled
+# Not part of the artifact.
+**/*_test.go
+**/testdata

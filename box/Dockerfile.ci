@@ -1,0 +1,88 @@
+# syntax=docker/dockerfile:1
+# slopball cloud box — CI / published image (plan 23).
+# Multi-stage, buildx-driven: each arch compiles its own static binary.
+# Runtime stage matches the --build-local Dockerfile (debian + node).
+#
+#   docker buildx build --platform linux/amd64,linux/arm64 \
+#     -f internal/box/Dockerfile.ci \
+#     --build-arg VERSION=1.2.3 --build-arg REVISION=$(git rev-parse HEAD) \
+#     -t ghcr.io/nwylynko/slopball-box:1.2.3 --push .
+
+FROM --platform=$BUILDPLATFORM golang:1.26 AS build
+ARG TARGETOS
+ARG TARGETARCH
+WORKDIR /src
+
+# Module download first for layer cache.
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+
+# Bundled git archives are gitignored — fetch (and checksum-verify) the target
+# arch inside the build. TARGETARCH is only set under buildx; default it so a
+# plain `docker build` still produces a coherent binary + embedded git pair.
+#
+# ONLY the script is copied first, and that ordering is the point: the pinned
+# version and its sha256s live inside the script, so this layer depends on
+# nothing else in the repo. Below `COPY . .` it re-downloaded and re-verified
+# both archives on every commit — on a CI runner, which is always a cold cache,
+# that is a fresh download per release for an input that changes about once a
+# year. `COPY . .` still lands afterwards and merges rather than cleans, so the
+# archives this produced survive it.
+COPY scripts/fetch-bundled-git.sh scripts/
+RUN bash scripts/fetch-bundled-git.sh "linux-${TARGETARCH:-amd64}"
+
+COPY . .
+
+# ARG VERSION is declared HERE and not at the top of the stage: a build arg in
+# scope is part of the cache key of every RUN below it, used or not, and VERSION
+# moves on every commit. Above `go mod download` it re-downloaded the module
+# graph once per commit for a version stamp.
+ARG VERSION=0.0.0-dev
+# Go's own caches ride cache mounts, so a source change relinks instead of
+# recompiling every dependency (14s → ~2s). They are mounts, not layers, so
+# nothing they hold reaches the image.
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+    go build -ldflags "-s -w -X github.com/nwylynko/slopball-cli/cli.Version=${VERSION}" \
+    -o /out/slopball ./cmd/slopball
+
+FROM debian:trixie
+
+# The two expensive layers come FIRST, above any ARG whose value moves per
+# commit — see the note in the build stage. With VERSION/REVISION declared above
+# them (for a LABEL), every `make box-image` after a commit re-ran debian's
+# `nodejs npm` install (36s, ~500MB of node-* packages), then exported a large
+# image sharing no layer with any earlier tag.
+
+# System deps: git (fallback; the binary also bundles its own), TLS roots, and
+# node+corepack for the session's own install/dev. Conductor intelligence runs
+# on a laptop — no agent CLI is installed here (§10 / ticket 08).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates git curl nodejs npm \
+ && corepack enable || true \
+ && rm -rf /var/lib/apt/lists/*
+
+ARG VERSION=0.0.0-dev
+ARG REVISION=unknown
+
+LABEL org.opencontainers.image.title="slopball-box" \
+      org.opencontainers.image.description="slopball cloud dev box — hosts a session canonical and supervises the dev server" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${REVISION}" \
+      org.opencontainers.image.source="https://github.com/nwylynko/slopball"
+
+COPY --from=build /out/slopball /usr/local/bin/slopball
+# Smoke-test the binary in the runtime image and assert it carries the version
+# this tag claims — the image the box pulls is the one the drift guard compares.
+RUN chmod +x /usr/local/bin/slopball \
+ && slopball --version \
+ && slopball --version | grep -qF "${VERSION}"
+
+# State lives at $HOME/.slopball (session.Home fallback). docker run sets
+# HOME=/home/slopball for uid 1000; do not bake SLOPBALL_HOME here — that used
+# to pin /root/.slopball and break non-root containment (ticket 09).
+WORKDIR /home/slopball
+ENTRYPOINT ["slopball"]
+CMD ["--help"]

@@ -1,0 +1,4 @@
+# The pinned static git distribution, fetched and checksum-verified by
+# scripts/fetch-bundled-git.sh and baked in by //go:embed. Never committed:
+# it is ~25MB per platform and the pin lives in the script, not in the blob.
+/git/bundled/*.tar.xz
