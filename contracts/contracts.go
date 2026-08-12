@@ -194,6 +194,21 @@ conflict stops at your machine instead of reaching the team.
 The intent note is not paperwork: when your change does collide with somebody
 else's, it is what the merger reads to resolve it well. Say what you changed and why.
 
+## Seeing it run
+
+There are two different things to look at, and confusing them wastes an hour.
+
+- **The session's site — `+"`"+`slopball site`+"`"+`** prints the URL it is open on from this
+  machine. That site serves `+"`"+`main`+"`"+`: everyone's merged work, not yours. After a
+  `+"`"+`sync`+"`"+`, this is where you check your change actually landed and still works
+  alongside everyone else's.
+- **Your own branch — `+"`"+`slopball dev-setup`+"`"+`** prints the project's install and dev
+  commands and where to run them. Nothing serves your branch until you do this,
+  so it is the only way to see a change you have not synced yet.
+
+Both are commands rather than URLs written in this file, because both answers
+differ per machine and this file is shared by every agent in the session.
+
 ## Other commands
 
 - `+"`"+`slopball run -- <cmd>`+"`"+` — run a command on the host (where the dev server lives).

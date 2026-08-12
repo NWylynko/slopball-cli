@@ -487,6 +487,12 @@ func (j *Joined) ensureDevForwarder(ctx context.Context) {
 	j.mu.Lock()
 	j.devURL = url
 	j.mu.Unlock()
+	// Published so `slopball site` can report THIS forwarder. A separate CLI
+	// process resolving the endpoint itself would find this port taken, retry
+	// to the next derived one, and print a URL that closes when it exits.
+	if err := session.PublishDevURL(j.Session.PIN, url); err != nil {
+		j.log.Warnf("could not publish the dev URL for `slopball site`: %v", err)
+	}
 	j.log.Infof("dev server: %s", url)
 }
 

@@ -786,6 +786,12 @@ func (r *Running) StartDev(ctx context.Context, install, dev []string) error {
 	log.Infof("dev server started: %s (in %s)", strings.Join(dev, " "), r.Host.Work)
 	go watchDevStartup(ctx, r.Dev, dev, r.logs, log)
 	r.startDevHolder(ctx, log)
+	// On this machine the site is the dev process itself, not a forwarder to
+	// one — 127.0.0.1 rather than localhost because a dev server that bound
+	// only v4 is unreachable on a box where localhost resolves ::1 first.
+	if err := session.PublishDevURL(r.PIN, fmt.Sprintf("http://127.0.0.1:%d", runtime.DevPort)); err != nil {
+		log.Warnf("could not publish the dev URL for `slopball site`: %v", err)
+	}
 	if r.Runtime != nil {
 		// A seeded repo usually already declares PORT, and main may not advance
 		// for minutes — publish the dev URL now rather than when it happens to.

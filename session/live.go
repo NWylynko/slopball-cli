@@ -16,6 +16,12 @@ type LiveMarker struct {
 	Role      Role      `json:"role"`
 	Branch    string    `json:"branch,omitempty"`
 	StartedAt time.Time `json:"startedAt"`
+	// DevURL is the address THIS machine opens the session's dev server on: a
+	// client's forwarder, or a host's own bound port. It lives beside the pid
+	// because it dies with the process holding it — the forwarder is
+	// process-lived (sessionnet.LocalURL) — and LiveHere already deletes a
+	// marker whose pid is gone, so a URL cannot outlive its listener here.
+	DevURL string `json:"devUrl,omitempty"`
 }
 
 // LiveEntry is one live session discovered under $SLOPBALL_HOME.
@@ -57,6 +63,34 @@ func ClearLive(pin string) error {
 		return err
 	}
 	return nil
+}
+
+// PublishDevURL records where this machine opens the dev server, leaving the
+// rest of the marker alone. The two callers are the only processes that can
+// hold such an address: the join daemon (its forwarder) and a host running the
+// dev server itself.
+//
+// A missing marker is not an error — nothing is live here, so there is no
+// address to publish and `slopball site` should say exactly that rather than
+// read a URL out of a file no process stands behind.
+func PublishDevURL(pin, url string) error {
+	path := ForPin(pin).Live()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	var m LiveMarker
+	if err := json.Unmarshal(b, &m); err != nil {
+		return err
+	}
+	if m.DevURL == url {
+		return nil
+	}
+	m.DevURL = url
+	return WriteLiveMarker(pin, m)
 }
 
 // LiveHere reports whether THIS machine is currently holding one session open,
