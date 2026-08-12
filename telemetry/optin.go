@@ -126,6 +126,11 @@ type MemberConfig struct {
 	MemberID   string
 	Advertised string
 	Ticket     string
+	// Version is this client's build. It rides the member config rather than
+	// being read here because this package cannot import controlplane — that
+	// package imports this one — and the member cycle, which owns the constant
+	// the wire header carries, is the single caller.
+	Version string
 }
 
 // ForMember builds the emitter a member uses, or a disabled one. Three
@@ -142,11 +147,11 @@ type MemberConfig struct {
 func ForMember(cfg MemberConfig) *Emitter {
 	on, _ := Resolve()
 	if !on {
-		return New(Config{Service: "client"})
+		return New(Config{Service: "client", Version: cfg.Version})
 	}
 	url := SessionIngest(cfg.PIN, cfg.Advertised)
 	if url == "" || strings.TrimSpace(cfg.Ticket) == "" {
-		return New(Config{Service: "client"})
+		return New(Config{Service: "client", Version: cfg.Version})
 	}
-	return New(Config{URL: url, Bearer: cfg.Ticket, Service: "client"})
+	return New(Config{URL: url, Bearer: cfg.Ticket, Service: "client", Version: cfg.Version})
 }

@@ -125,6 +125,7 @@ func runReport(cmd *cobra.Command, _ []string) error {
 	reportID := newReportID()
 	em := telemetry.New(telemetry.Config{
 		URL: ingest, Bearer: ticket, Service: "client", Timeout: 30 * time.Second,
+		Version: controlplane.ClientVersion,
 	})
 	for i, sec := range sections {
 		body := sec.Body

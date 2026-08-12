@@ -86,12 +86,23 @@ type Event struct {
 	Data map[string]any
 }
 
-// Envelope is the wire form: an Event with the emission site's name and the
-// emitting service stamped on it.
+// Envelope is the wire form: an Event with the emission site's name, the
+// emitting service and the emitting BUILD stamped on it.
 type Envelope struct {
 	TS      time.Time `json:"ts"`
 	Name    string    `json:"name"`
 	Service string    `json:"service"`
+	// Version is the build of the binary that produced this envelope, stamped
+	// by the emitter rather than passed per-event: a caller cannot get it wrong
+	// and a new emission site cannot forget it.
+	//
+	// It is a column of its own for the same reason `dropped` is. The client's
+	// build was already IN this table — as a header line inside `headers`, and
+	// inside every session document in `body` — and being in a text blob it
+	// could not be selected, grouped or joined on, so "did this start at the
+	// deploy?" was unanswerable from the one place that has the data. The
+	// services' builds were not recorded anywhere at all.
+	Version string `json:"version,omitempty"`
 
 	Source     string `json:"source,omitempty"`
 	PIN        string `json:"pin,omitempty"`
@@ -133,6 +144,13 @@ type Config struct {
 	// other; a client has no service key and must never be given one.
 	Bearer  string
 	Service string // control | relay | client
+	// Version is this binary's build, stamped onto every envelope it produces.
+	// Each construction site passes the version it already owns — a service its
+	// `main.Version`, a client the same constant it presents on the wire — so
+	// there is no fourth place to stamp at build time and no second name for
+	// the fact. Blank is honest for an unstamped `go build`/`go test` binary and
+	// stays blank rather than claiming a release.
+	Version string
 
 	QueueDepth int
 	BatchSize  int
@@ -234,7 +252,7 @@ func (e *Emitter) Emit(name string, ev Event) {
 		ts = e.now().UTC()
 	}
 	env := Envelope{
-		TS: ts, Name: name, Service: e.cfg.Service,
+		TS: ts, Name: name, Service: e.cfg.Service, Version: e.cfg.Version,
 		Source: ev.Source, PIN: ev.PIN, SessionUID: ev.SessionUID, Member: ev.Member,
 		TraceID: ev.TraceID, Level: ev.Level, Component: ev.Component,
 		Method: ev.Method, PathTemplate: ev.PathTemplate, Status: ev.Status,

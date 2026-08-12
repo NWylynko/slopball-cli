@@ -1154,5 +1154,9 @@ func (c *Client) useTelemetry(pin, id string, sess *Session) {
 		PIN: pin, SessionUID: uid, MemberID: id,
 		Advertised: advertised,
 		Ticket:     c.RelayTicket(pin, telemetry.TicketService),
+		// The same constant this cycle puts in VersionHeader, so a row and the
+		// request that carried it name one build rather than two facts nobody
+		// can join. telemetry cannot read it itself — this package imports it.
+		Version: ClientVersion,
 	})
 }
