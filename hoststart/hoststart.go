@@ -575,8 +575,14 @@ func Start(ctx context.Context, opt Options) (*Running, error) {
 	// elects itself conductor later can read it back (plan 29).
 	publishAgents(ctx, client, pin, opt)
 	fleet := &conductor.Fleet{
-		Roles: []conductor.Role{merger, watcher, setup},
-		After: []conductor.Role{rt},
+		// merger and watcher hold host.Work, which the host loop resets with
+		// SyncWorkToMain the moment the tick returns, so the tick waits for them.
+		// setup scaffolds for minutes in a private temp clone — detached, or the
+		// merge hot path stops for as long as an agent takes to run
+		// create-next-app.
+		Roles:    []conductor.Role{merger, watcher},
+		Detached: []conductor.Role{setup},
+		After:    []conductor.Role{rt},
 	}
 
 	// A serve-only host IS the cloud box: it serves canonical and tracks main

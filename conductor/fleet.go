@@ -34,15 +34,81 @@ type Role interface {
 // Callers that SyncWorkToMain between merge and runtime should use TickRoles
 // then TickAfter around the sync, not TickAll.
 type Fleet struct {
+	// Roles hold Host.Work, so a tick waits for them: the host loop's
+	// SyncWorkToMain resets that same tree, and the merger's checkout → merge →
+	// push is several git processes with no lock held across them.
 	Roles []Role
-	After []Role
+	// Detached roles work somewhere else — setup does its whole scaffold in a
+	// private temp clone and lands one commit on main — so a tick STARTS them
+	// and returns. This is the difference between a merge hot path that keeps
+	// its 2s cadence and one that stops for four minutes while an agent runs
+	// create-next-app: with the barrier at the end of the tick, a client's
+	// `slopball sync` reported ok and then sat unmerged for the whole scaffold.
+	//
+	// The bar for this list is that the role touches nothing another role or the
+	// host loop touches. The error-watcher is NOT on it: its AI fix runs against
+	// Host.Work like the merger's.
+	Detached []Role
+	After    []Role
+
+	// inFlight is the set of detached roles whose Tick has not returned yet. At
+	// a 2s tick a four-minute scaffold would otherwise be started 120 times,
+	// every copy blocked on that role's own mutex.
+	mu       sync.Mutex
+	inFlight map[string]bool
 }
 
-// TickRoles runs Roles in parallel (merger, error-watcher, …).
+// fleetLog carries the errors of a detached role, which has no caller left to
+// return them to. Visible by default — a role failing every tick in silence is
+// the failure mode this repo's fix-forward rule exists to prevent.
+var fleetLog = logx.New("fleet")
+
+// TickRoles starts the Detached roles, then runs Roles to completion. This is
+// the loop door: `slopball conductor`, the join daemon, and the host's own 2s
+// tick, all of which get another go 2s later.
 func (f *Fleet) TickRoles(ctx context.Context) error {
+	f.startDetached(ctx)
+	return f.runRoles(ctx, f.Roles)
+}
+
+// TickRolesToCompletion runs every role — Detached ones included — and waits.
+// This is the one-shot door: `slopball conductor --once` and the emulator's
+// hand-driven ticks, where the caller's next line depends on the work being
+// done and there is no next tick to catch what was skipped.
+func (f *Fleet) TickRolesToCompletion(ctx context.Context) error {
+	all := make([]Role, 0, len(f.Roles)+len(f.Detached))
+	all = append(all, f.Roles...)
+	for _, r := range f.Detached {
+		if f.claim(r.Name()) {
+			defer f.release(r.Name())
+			all = append(all, r)
+		}
+	}
+	return f.runRoles(ctx, all)
+}
+
+// startDetached starts each idle detached role in its own goroutine, outliving
+// this tick, and skips any still running from an earlier one.
+func (f *Fleet) startDetached(ctx context.Context) {
+	for _, r := range f.Detached {
+		if !f.claim(r.Name()) {
+			fleetLog.Debugf("%s is still running from an earlier tick — not starting it again", r.Name())
+			continue
+		}
+		go func(r Role) {
+			defer f.release(r.Name())
+			if err := r.Tick(ctx); err != nil {
+				fleetLog.Warnf("%s: %v", r.Name(), err)
+			}
+		}(r)
+	}
+}
+
+// runRoles runs roles in parallel and waits for all of them.
+func (f *Fleet) runRoles(ctx context.Context, roles []Role) error {
 	var wg sync.WaitGroup
-	errCh := make(chan error, len(f.Roles))
-	for _, r := range f.Roles {
+	errCh := make(chan error, len(roles))
+	for _, r := range roles {
 		wg.Add(1)
 		go func(r Role) {
 			defer wg.Done()
@@ -59,6 +125,27 @@ func (f *Fleet) TickRoles(ctx context.Context) error {
 	return nil
 }
 
+// claim reserves a role's in-flight slot, reporting false when it is already
+// taken.
+func (f *Fleet) claim(name string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.inFlight[name] {
+		return false
+	}
+	if f.inFlight == nil {
+		f.inFlight = map[string]bool{}
+	}
+	f.inFlight[name] = true
+	return true
+}
+
+func (f *Fleet) release(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.inFlight, name)
+}
+
 // TickAfter runs After roles in order (runtime reconciler, …).
 func (f *Fleet) TickAfter(ctx context.Context) error {
 	for _, r := range f.After {
@@ -69,10 +156,15 @@ func (f *Fleet) TickAfter(ctx context.Context) error {
 	return nil
 }
 
-// TickAll runs TickRoles then TickAfter. Prefer the split form when work-tree
-// sync must happen between them.
+// TickAll runs TickRolesToCompletion then TickAfter. Prefer the split form when
+// work-tree sync must happen between them.
+//
+// It waits, because After roles exist to see a main the Roles have already
+// advanced — running the runtime reconciler against a merge still in flight is
+// the ordering this method is for. A caller on a loop wants TickRoles plus
+// TickAfter instead, and gets the same ordering one tick later.
 func (f *Fleet) TickAll(ctx context.Context) error {
-	if err := f.TickRoles(ctx); err != nil {
+	if err := f.TickRolesToCompletion(ctx); err != nil {
 		return err
 	}
 	return f.TickAfter(ctx)

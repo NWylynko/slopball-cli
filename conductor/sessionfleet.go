@@ -118,7 +118,9 @@ func BuildSessionFleet(ctx context.Context, spec SessionFleetSpec) SessionFleet 
 	}
 	built.Harnesses[RoleSetup] = setup.Harness
 
-	roles := []Role{merger, setup}
+	// setup is detached: it scaffolds in a private temp clone for minutes, and
+	// the merge hot path must keep its 2s cadence underneath it.
+	roles := []Role{merger}
 	if built.LogsURL = SessionLogsURL(ctx, spec.Control, spec.PIN, spec.Host); built.LogsURL != "" {
 		watchBrain := brainFor(RoleErrorWatcher)
 		mechanical(RoleErrorWatcher, watchBrain)
@@ -149,7 +151,7 @@ func BuildSessionFleet(ctx context.Context, spec SessionFleetSpec) SessionFleet 
 		roles = append(roles, watcher)
 		built.Harnesses[RoleErrorWatcher] = watcher.Harness
 	}
-	built.Fleet = &Fleet{Roles: roles}
+	built.Fleet = &Fleet{Roles: roles, Detached: []Role{setup}}
 	// Every built role starts idle, so a dashboard shows the fleet the moment
 	// it exists rather than only once something happens to it.
 	for role := range built.Harnesses {

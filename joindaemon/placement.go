@@ -272,7 +272,13 @@ func (j *Joined) tickFleet(ctx context.Context) {
 			_ = host.Refresh(ctx)
 		}
 	}
-	if err := fleet.TickAll(ctx); err != nil {
+	// TickRoles starts the roles and returns: this is a loop, so a role that is
+	// still running from the last round is caught by the next one, and a
+	// minutes-long setup scaffold never holds up the merger behind it.
+	if err := fleet.TickRoles(ctx); err != nil {
+		j.log.Warnf("conductor tick: %v", err)
+	}
+	if err := fleet.TickAfter(ctx); err != nil {
 		j.log.Warnf("conductor tick: %v", err)
 	}
 }

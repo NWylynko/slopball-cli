@@ -723,18 +723,32 @@ func runConductor(cmd *cobra.Command, _ []string) error {
 	// floor underneath it (plan 43). A local host is never gated — its Refresh
 	// is already a no-op.
 	gate := conductor.NewRefreshGate(controlClient(cmd), s.PIN, host.RemoteURL() != "")
-	tick := func() error {
+	// The two doors differ in whether they wait for the roles they start, and
+	// the difference is the whole point: `--once` has no next tick to catch a
+	// role it skipped, so it runs them to completion; the loop must come round
+	// every 2s even while a minutes-long setup scaffold is in flight.
+	refresh := func() error {
 		if gate.Due(time.Now()) {
-			if err := host.Refresh(ctx); err != nil { // no-op for a local host
-				return err
-			}
+			return host.Refresh(ctx) // no-op for a local host
 		}
-		return fleet.TickAll(ctx)
+		return nil
 	}
 
 	once, _ := cmd.Flags().GetBool("once")
 	if once {
-		return tick()
+		if err := refresh(); err != nil {
+			return err
+		}
+		return fleet.TickAll(ctx)
+	}
+	tick := func() error {
+		if err := refresh(); err != nil {
+			return err
+		}
+		if err := fleet.TickRoles(ctx); err != nil {
+			return err
+		}
+		return fleet.TickAfter(ctx)
 	}
 	// A standalone conductor is long-running, so it holds the stream too — that
 	// is what makes a merge follow a push rather than a floor. `--once` above
