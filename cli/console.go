@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"github.com/nwylynko/slopball-cli/reach"
 	"github.com/nwylynko/slopball-cli/session"
 	"github.com/nwylynko/slopball-cli/syncengine"
+	"github.com/nwylynko/slopball-cli/update"
 	"github.com/spf13/cobra"
 )
 
@@ -137,6 +139,24 @@ func (a *announcer) WorkPath() string {
 // and piped output must be byte-identical to before, so the fallback is a plain
 // call with the caller's own stdout — no interception, no reformatting.
 func runConsole(ctx context.Context, cmd *cobra.Command, cs consoleSession) error {
+	// The one place slopball checks whether it is out of date, because this is
+	// the one place a session starts — all three verbs that enter a session come
+	// through here, and a check per verb would be three chances to forget one.
+	//
+	// It runs BEHIND the session and is read on the way out. Nothing about a new
+	// release is worth a second of a hackathon's build window: the check cannot
+	// block the session starting, cannot block it ending, and prints nothing at
+	// all if it fails or if this build is current. `--once` and the emulator go
+	// through the no-terminal path below and are read the same way, but a box
+	// hosting under `_host` has nobody at the terminal to read the line — that
+	// costs nothing, and it is better than a container logging update advice.
+	updateNudge := update.StartCheck(ctx, Version)
+	defer func() {
+		if line := updateNudge(); line != "" {
+			fmt.Fprintln(cmd.ErrOrStderr(), line)
+		}
+	}()
+
 	if entered := testHooks().ConsoleEntered; entered != nil {
 		entered(ConsoleUp{PIN: cs.PIN, Leave: cs.Leave})
 	}

@@ -247,11 +247,21 @@ func NewRootCmd() *cobra.Command {
 	mon.Flags().Duration("interval", 2*time.Second, "refresh interval")
 	addPinFlag(mon)
 
+	// `slopball update` — the verb the end-of-session nudge names. A human verb,
+	// so it takes no flags and asks no questions: which release, which asset and
+	// where it lands are all already decided (slopball-cli/update).
+	updateCmd := &cobra.Command{
+		Use:   "update",
+		Short: "Replace this slopball with the latest release",
+		Args:  cobra.NoArgs,
+		RunE:  runUpdate,
+	}
+
 	// `control` and `relay` are NOT verbs here. They are operator services
 	// shipped as `slopball-control` and `slopball-relay` (plan 39): different
 	// audience, different release cadence, linux-only. Keeping them on this
 	// binary is what made every teammate's laptop link a postgres driver.
-	root.AddCommand(hostCmd, join, syncCmd, push, pull, repoint, runCmd, conductorCmd, daemon, elect, take, handOff, services, newMembersCmd(), newAccessCmd(), newTelemetryCmd(), newReportCmd(), mon, newBoxCmd(), newOpenCmd(), newSiteCmd(), newDevSetupCmd())
+	root.AddCommand(hostCmd, join, syncCmd, push, pull, repoint, runCmd, conductorCmd, daemon, elect, take, handOff, services, newMembersCmd(), newAccessCmd(), newTelemetryCmd(), newReportCmd(), mon, newBoxCmd(), newOpenCmd(), newSiteCmd(), newDevSetupCmd(), updateCmd)
 	return root
 }
 

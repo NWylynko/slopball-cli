@@ -56,6 +56,7 @@ Two verbs and a rule: **`slopball`** starts a session and *tells you* its PIN (i
 | `slopball hand-off` / `take` | move a session service (git, dev, conductor) to another member |
 | `slopball report` | upload everything about a broken session so someone can look at it |
 | `slopball telemetry` | show or set telemetry for this machine — **off by default** |
+| `slopball update` | replace this binary with the latest release |
 
 ## Two ways to run a session
 
@@ -70,7 +71,23 @@ You join a *session*, not a machine — the host can migrate live without anyone
 
 ## Install
 
-Build from source (Go 1.26+):
+```
+$ curl -fsSL https://slopball.wylynko.dev/install.sh | sh
+```
+
+One static binary into `~/.local/bin` (set `SLOPBALL_INSTALL_DIR` for somewhere else). macOS and Linux, arm64 and amd64.
+
+> **While the repos are private**, the download itself is authenticated: install the GitHub CLI and `gh auth login`, or set `GITHUB_TOKEN`. The script says so if you have neither.
+
+To update later:
+
+```
+$ slopball update
+```
+
+which is the same thing as `curl -fsSL https://slopball.wylynko.dev/update.sh | sh` — it replaces the `slopball` you are actually running, wherever that is. slopball checks for a newer version when a session starts and tells you once the session is **over**, so it never interrupts a build.
+
+Build from source instead (Go 1.26+):
 
 ```
 $ git clone https://github.com/NWylynko/slopball-cli
