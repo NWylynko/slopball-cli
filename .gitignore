@@ -2,3 +2,7 @@
 # scripts/fetch-bundled-git.sh and baked in by //go:embed. Never committed:
 # it is ~25MB per platform and the pin lives in the script, not in the blob.
 /git/bundled/*.tar.xz
+
+# Build outputs. The release matrix is rebuilt by CI from the tag; a dist/
+# committed here would be a stale binary somebody eventually runs.
+/dist/

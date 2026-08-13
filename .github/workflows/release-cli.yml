@@ -1,0 +1,150 @@
+name: release-cli
+
+# Cross-compile the laptop CLI and stamp controlplane.DefaultURL from the
+# repository variable SLOPBALL_DEFAULT_CONTROL. A local `make build` needs no
+# stamp (loopback default); this is the delivery path for a deployed control
+# plane (plan 45b).
+#
+# On a `v*` tag this also publishes the GitHub Release, which is the only
+# distribution channel there is (plan 47 step 10 — homebrew was dropped, decided
+# not deferred). The assets are the files `make release` writes, under exactly
+# the names it writes them: scripts/install.sh derives the same name from
+# `uname`, and scripts/installer_test.go holds the three files to it.
+#
+# THIS REPO, not the monorepo (plan 49 phase B). The monorepo's copy of this
+# workflow checked out a tree that no longer contained the CLI and failed on
+# `no required module provides package .../cmd/slopball` — it had been dead
+# since the split and nothing said so, because no tag had been cut since.
+#
+# The same tag fires box-image.yml, so the CLI and the box image it pulls are
+# one release rather than two things that can drift.
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+# One build per ref, so a burst of pushes to main supersedes rather than queues.
+# Tags are their own refs and never cancel each other.
+concurrency:
+  group: release-cli-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  # Decide whether this push is worth a build. The matrix is four
+  # cross-compiles; on a tag that is the release itself and never optional, but
+  # on main it would otherwise run for every commit, including ones that changed
+  # only markdown — and once more for the tag when `--follow-tags` pushed both,
+  # so a release paid for the same four binaries twice.
+  #
+  # Path filters in `on:` cannot express this: they apply to tag pushes too, and
+  # a tag placed on an already-pushed commit has no diff of its own, so the
+  # release build would be the thing skipped.
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.decide.outputs.build }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: decide
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          say() { echo "build=$1" >> "$GITHUB_OUTPUT"; echo "$2"; }
+
+          # A tag is a release. Never skipped, whatever it touched.
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            say true "tag ${GITHUB_REF_NAME}: building the release matrix"; exit 0
+          fi
+          if [ "${{ github.event_name }}" != "push" ]; then
+            say true "${{ github.event_name }}: building on request"; exit 0
+          fi
+
+          # The tag run is about to do this same build on this same commit.
+          if [ -n "$(git tag --points-at HEAD)" ]; then
+            say false "$(git tag --points-at HEAD | tr '\n' ' ')points at this commit — leaving the build to the tag run"; exit 0
+          fi
+
+          # A new or force-pushed ref has no honest diff; build rather than guess.
+          if [ -z "${BEFORE:-}" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            say true "no usable previous commit — building"; exit 0
+          fi
+
+          changed="$(git diff --name-only "$BEFORE" "$GITHUB_SHA")"
+          echo "changed files:"; echo "$changed" | sed 's/^/  /'
+          # What ends up IN a binary, or decides how one is built. Everything
+          # else — the README, docs — cannot change a byte of the four artifacts
+          # this workflow uploads.
+          if echo "$changed" | grep -qE '(\.go$|^go\.(mod|sum)$|^Makefile$|^scripts/|^box/Dockerfile|^\.github/workflows/release-cli\.yml$)'; then
+            say true "source changed — building"
+          else
+            say false "nothing that reaches a binary changed — skipping the matrix"
+          fi
+
+  release:
+    needs: guard
+    if: needs.guard.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The tag IS the version: VERSION comes from `git describe --tags`, and
+          # a shallow checkout has no tags, so every asset would report
+          # 0.0.0-dev while looking like a successful release.
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Require SLOPBALL_DEFAULT_CONTROL
+        id: control
+        run: |
+          url="${{ vars.SLOPBALL_DEFAULT_CONTROL }}"
+          if [ -z "$url" ]; then
+            echo "Set repository variable SLOPBALL_DEFAULT_CONTROL to the deployment control-plane URL." >&2
+            exit 1
+          fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+      - name: Fetch bundled git (all arches)
+        run: make fetch-git-all
+      - name: Cross-compile release matrix
+        # CONTROL_URL on the command line, which beats any default in the
+        # Makefile — the documented CI stamping path (ADR 0006 decision 5a).
+        run: make release CONTROL_URL=${{ steps.control.outputs.url }}
+      - name: Check the matrix is complete and stamped
+        run: |
+          set -eu
+          for p in darwin-arm64 darwin-amd64 linux-arm64 linux-amd64; do
+            test -s "dist/slopball-$p" || { echo "missing dist/slopball-$p" >&2; exit 1; }
+          done
+          # The host-arch one is the only asset this runner can execute, so it is
+          # the one that can prove the tag and the control URL actually landed.
+          got="$(./dist/slopball-linux-amd64 --version)"
+          echo "linux-amd64 reports: $got"
+          case "${GITHUB_REF_NAME}" in
+            v*) echo "$got" | grep -q "${GITHUB_REF_NAME}" || {
+                  echo "binary reports $got, not the tag ${GITHUB_REF_NAME}" >&2; exit 1; } ;;
+          esac
+          ./dist/slopball-linux-amd64 --help >/dev/null
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: slopball-cli
+          path: dist/slopball-*
+      - name: Publish the GitHub Release
+        # Tags only. A release per push to main would mint one per commit and
+        # make "latest" meaningless, which is what install.sh resolves — and
+        # what slopball.wylynko.dev/version reports to every installed client.
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/slopball-*
+          generate_release_notes: true

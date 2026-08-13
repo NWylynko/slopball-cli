@@ -1,0 +1,141 @@
+name: box-image
+
+# Publish ghcr.io/nwylynko/slopball-box:<version> (multi-arch) on tag.
+# Local mirror: `make box-image` / `make box-image PUSH=1`.
+#
+# THIS REPO, not the monorepo (plan 49 phase B). The box image is built from
+# this module as its context and the Dockerfiles live in box/; the monorepo's
+# copy of this workflow still named `internal/box/Dockerfile.ci` with the repo
+# root as context, a path that had moved here at the split. It had been dead
+# ever since, and nothing said so because no tag had been cut.
+#
+# A tag is the only automatic trigger, and it is the SAME tag release-cli.yml
+# builds from — so the CLI and the box image it pulls are one release rather
+# than two things that can drift. `release: [published]` used to be here as well
+# and was removed: it could only mean a second full build of a byte-identical
+# image, and it was invisible, because a release created with GITHUB_TOKEN does
+# not trigger workflows.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to publish (default: latest git describe)"
+        required: false
+
+# One build per ref. A re-pushed tag or a double dispatch supersedes the run in
+# flight instead of paying for both — this is the whole of a ~20 minute run.
+concurrency:
+  group: box-image-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ghcr.io/nwylynko/slopball-box
+
+jobs:
+  # ⚠️ THE GATE IS A BUILD, NOT THE SUITE, and that is a real reduction.
+  #
+  # In the monorepo this job ran `make test` — the whole product suite — before
+  # publishing. That suite cannot run here: it needs cptest, postgres, the relay
+  # and telemetry images and every test file, all of which stayed in the private
+  # monorepo by design (plan 49). What is left is what a public repo can prove
+  # on its own: it compiles, it vets, and the distribution contract in
+  # scripts/installer_test.go still holds.
+  #
+  # So the real gate moved rather than vanished — it is now `make test` in the
+  # monorepo, run before the tag is cut. That is the cut-after-validation
+  # discipline plan 49 already requires for a different reason (a public module
+  # tag is permanent once the proxy sees it), and this is a second reason to
+  # keep it.
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Fetch bundled git
+        run: make fetch-git
+      - name: Build, vet and run the public guards
+        run: make test
+
+  publish:
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.tag }}" ]; then
+            V="${{ inputs.tag }}"
+          else
+            V="${GITHUB_REF_NAME}"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "revision=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          # :latest is the tag an unreleased CLI pulls (box.DefaultImageRef's
+          # fallback), so only a final release may move it — never an -rc/-beta.
+          {
+            echo 'tags<<TAGS_EOF'
+            echo "$IMAGE:$V"
+            if echo "$V" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "$IMAGE:latest"
+            else
+              echo "prerelease $V — tagging :$V only, leaving :latest alone" >&2
+            fi
+            echo 'TAGS_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push multi-arch
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: box/Dockerfile.ci
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: true
+          build-args: |
+            VERSION=${{ steps.ver.outputs.version }}
+            REVISION=${{ steps.ver.outputs.revision }}
+          tags: ${{ steps.ver.outputs.tags }}
+          # Layer cache across runs, because every runner is a cold cache.
+          # `mode=max` keeps the intermediate build stage, not just the final
+          # layers.
+          #
+          # Be honest about what this does and does not reach. It restores the
+          # base images, `go mod download`, and the bundled-git fetch (which is
+          # why that COPY was narrowed to the script alone). It does NOT restore
+          # the compile: `COPY . .` sits above it and every release changes the
+          # source, and Go's own caches ride `--mount=type=cache`, which no
+          # cache exporter carries. So this trims the fixed cost off each
+          # release and leaves the compile, which is the part that genuinely
+          # differs each time.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Inspect multi-arch manifest
+        run: |
+          docker buildx imagetools inspect "${{ env.IMAGE }}:${{ steps.ver.outputs.version }}"
+          docker buildx imagetools inspect "${{ env.IMAGE }}:${{ steps.ver.outputs.version }}" \
+            | grep -E 'Platform:.*(amd64|arm64)' | tee /tmp/platforms.txt
+          grep -q amd64 /tmp/platforms.txt
+          grep -q arm64 /tmp/platforms.txt

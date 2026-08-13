@@ -71,7 +71,7 @@ LABEL org.opencontainers.image.title="slopball-box" \
       org.opencontainers.image.description="slopball cloud dev box — hosts a session canonical and supervises the dev server" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${REVISION}" \
-      org.opencontainers.image.source="https://github.com/nwylynko/slopball"
+      org.opencontainers.image.source="https://github.com/nwylynko/slopball-cli"
 
 COPY --from=build /out/slopball /usr/local/bin/slopball
 # Smoke-test the binary in the runtime image and assert it carries the version
