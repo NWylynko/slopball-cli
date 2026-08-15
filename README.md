@@ -111,3 +111,7 @@ Telemetry is **opt-in per machine** and off until you turn it on (`slopball tele
 - **Not** a deploy pipeline, a CI system, or a code-review tool. It deliberately throws all of that out for the 30-minute window.
 - **Not** a way to resolve *human* disagreement. If two teammates are building incompatible plans, slopball will faithfully merge the mechanical conflicts and faithfully surface that you disagree.
 - **Not** your backup. The optional GitHub mirror exists for exactly that reason — turn it on if the code needs to outlive the session.
+
+## License
+
+[PolyForm Shield 1.0.0](./LICENSE.md) — **source-available, not OSI open source.** Use it anywhere, including company hackathons; change it; ship it. The one thing it forbids is building a product that competes with slopball on its code. Contributions are inbound=outbound under the same terms, no CLA.
