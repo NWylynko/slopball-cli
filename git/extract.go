@@ -11,10 +11,12 @@ import (
 	"github.com/ulikunitz/xz"
 )
 
-// extractArchive unpacks a git-minimal-style tar.xz into dest. The archive's
+// ExtractArchive unpacks a git-minimal-style tar.xz into dest. The archive's
 // single top-level directory is stripped so dest ends up with cmd/, bin/,
-// libexec/, share/ directly underneath.
-func extractArchive(archive []byte, dest string) error {
+// libexec/, share/ directly underneath. Exported for the extractor's own tests
+// (the monorepo holds them); the only production caller is the embedded
+// bundled-git archive.
+func ExtractArchive(archive []byte, dest string) error {
 	marker := filepath.Join(dest, ".slopball-git-ok")
 	if _, err := os.Stat(marker); err == nil {
 		return nil
@@ -107,6 +109,18 @@ func untarStripRoot(r io.Reader, dest string) error {
 				return err
 			}
 		case tar.TypeSymlink:
+			// The link's TARGET has to stay inside dest too — the path check
+			// above covers where the link lives, not where it points.
+			// Absolute targets and relative ones that climb past dest are both
+			// refused; git-minimal's own links (`../../bin/git`) resolve inside.
+			resolved := hdr.Linkname
+			if !filepath.IsAbs(resolved) {
+				resolved = filepath.Join(filepath.Dir(target), resolved)
+			}
+			resolved = filepath.Clean(resolved)
+			if !strings.HasPrefix(resolved, filepath.Clean(dest)+string(os.PathSeparator)) {
+				return fmt.Errorf("tar symlink escapes dest: %s -> %s", hdr.Name, hdr.Linkname)
+			}
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return err
 			}

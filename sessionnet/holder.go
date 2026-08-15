@@ -334,17 +334,36 @@ func (l *holderListener) handleDirect(ctx context.Context, c net.Conn) {
 	}
 	_ = c.SetReadDeadline(time.Time{})
 	f := strings.Fields(strings.TrimSpace(line))
-	if len(f) != 4 || f[0] != relayProto || f[1] != "direct" || f[2] != l.cfg.PIN || f[3] != l.cfg.Service {
+	if len(f) != 4 || f[0] != relayProto || f[1] != "direct" {
 		_ = c.Close()
 		return
+	}
+	// A greeting naming a session or service this holder does not serve gets
+	// the SAME answer as a peer with the wrong key: `ok`, a handshake, a
+	// refusal. Closing here instead used to be a pre-handshake oracle — this
+	// listener has no ticket gate and no limiter, and it binds a LAN address
+	// whenever the control plane is remote, so a stranger on the venue wifi
+	// could confirm "this machine holds PIN X" at LAN speed. The decoy key is
+	// fresh per connection and the handshake fails at key confirmation exactly
+	// as a wrong session key does; nothing about the answer depends on the pin.
+	key, held := l.cfg.Key, f[2] == l.cfg.PIN && f[3] == l.cfg.Service
+	if !held {
+		key = NewKey()
 	}
 	if _, err := io.WriteString(c, "ok\n"); err != nil {
 		_ = c.Close()
 		return
 	}
-	sec, err := handshake(&prefixedConn{Conn: c, buf: br}, l.cfg.Key, false)
-	if err != nil {
-		logx.New("sessionnet").Warnf("%s: refused a direct %s connection: %v", l.cfg.PIN, l.cfg.Service, err)
+	sec, err := handshake(&prefixedConn{Conn: c, buf: br}, key, false)
+	if err != nil || !held {
+		if !held {
+			logx.New("sessionnet").Warnf("%s: refused a direct connection naming %s/%s, which this holder does not serve", l.cfg.PIN, f[2], f[3])
+		} else {
+			logx.New("sessionnet").Warnf("%s: refused a direct %s connection: %v", l.cfg.PIN, l.cfg.Service, err)
+		}
+		if sec != nil {
+			_ = sec.Close()
+		}
 		_ = c.Close()
 		return
 	}

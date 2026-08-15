@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/ed25519"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -153,9 +154,19 @@ type Relay struct {
 
 	// TicketPublic, when set, requires an Ed25519 relay ticket on register and
 	// connect (ticket 17). The relay holds ONLY this public key — nothing that
-	// could mint. Nil keeps today's PIN-only path for local unit tests that
-	// have not been wired; production sets it via $SLOPBALL_RELAY_TICKET_PUBLIC.
+	// could mint. Production sets it via $SLOPBALL_RELAY_TICKET_PUBLIC; nil is
+	// refused by Start unless AllowUnauthenticated says a keyless relay is
+	// meant (unit tests, the emulator).
 	TicketPublic ed25519.PublicKey
+
+	// AllowUnauthenticated lets Start open a relay with no TicketPublic — an
+	// accept-all availability surface (no read, no inject: the session-key
+	// handshake still gates those). It exists for unit tests and the emulator,
+	// which are the only callers that mean it; a deployed relay never sets it,
+	// and Start refuses a nil key without it so an omission cannot ship an open
+	// relay. `grep AllowUnauthenticated` is the audit of every keyless relay in
+	// the tree.
+	AllowUnauthenticated bool
 
 	mu        sync.Mutex
 	ln        net.Listener
@@ -201,6 +212,12 @@ func NewRelay() *Relay {
 // and one transport means one implementation of keepalive and dead-peer
 // eviction rather than two that disagree.
 func (r *Relay) Start(addr string) error {
+	// Fail closed. requireTicket reads a nil key as "authorized", which is the
+	// right shape for the unit-test relay and the wrong default for anything
+	// else — so a keyless relay has to say it means it.
+	if len(r.TicketPublic) == 0 && !r.AllowUnauthenticated {
+		return errors.New("sessionnet: relay refuses to start with no TicketPublic — set the Ed25519 ticket public key, or AllowUnauthenticated=true for a test relay that admits anyone")
+	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
@@ -216,6 +233,8 @@ func (r *Relay) Start(addr string) error {
 	log.Infof("%s", clientaddr.Describe(r.ProxyHops))
 	if len(r.TicketPublic) != 0 {
 		log.Infof("relay tickets required (Ed25519 public key configured)")
+	} else {
+		log.Warnf("relay tickets NOT required (AllowUnauthenticated) — anyone may register or connect; a test relay only")
 	}
 	return nil
 }

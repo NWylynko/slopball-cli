@@ -80,7 +80,7 @@ func resolveBin() (string, error) {
 		// a dead binary, but warn loudly so it's never silent.
 		return SystemGitFallback()
 	}
-	if err := extractArchive(embeddedArchive, prefix); err != nil {
+	if err := ExtractArchive(embeddedArchive, prefix); err != nil {
 		return "", fmt.Errorf("extract bundled git: %w", err)
 	}
 	if _, err := os.Stat(launcher); err != nil {
