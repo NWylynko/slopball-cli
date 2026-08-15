@@ -106,6 +106,10 @@ The server side — the control plane, the relay, and the telemetry ingest — l
 
 Telemetry is **opt-in per machine** and off until you turn it on (`slopball telemetry on`). What gets recorded is envelope metadata about slopball's own behaviour — never your code.
 
+## Before you run it
+
+[`TRUST.md`](./TRUST.md) says what you are trusting — what the relay can and cannot read, what a managed box holds, what telemetry records ([`docs/what-is-recorded.md`](./docs/what-is-recorded.md)), and what a session executes on your machine. [`SECURITY.md`](./SECURITY.md) is where to report something it gets wrong.
+
 ## What slopball is *not*
 
 - **Not** a deploy pipeline, a CI system, or a code-review tool. It deliberately throws all of that out for the 30-minute window.
