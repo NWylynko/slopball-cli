@@ -19,10 +19,12 @@
 # the script, the matrix that writes the assets, and the release that holds them
 # are one checkout, so there is no version of "latest" that means two things.
 #
-# The repo is private until plan 49's flip, so a download is an AUTHENTICATED
-# one: `gh` when it is installed and logged in, otherwise curl with
-# GITHUB_TOKEN/GH_TOKEN. There is deliberately no anonymous path — it could only
-# ever produce a 404 that reads like the release is missing.
+# The repo is PUBLIC (plan 49's flip, 2026-08-15), so the download is an
+# anonymous curl of the release asset URL and nothing else: no `gh`, no token,
+# no API call — a one-line installer that needs a credential is not one-line.
+# (Until the flip it was authenticated-only, because an anonymous path against a
+# private repo could only produce a 404 that read like the release was missing.)
+# Guarded by scripts/installer_test.go, which runs it with no gh and no token.
 set -eu
 
 BIN="slopball"
@@ -48,27 +50,23 @@ ASSET="$BIN-$os-$arch"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-echo "slopball: fetching $ASSET from $REPO ${TAG:+$TAG }release"
-if command -v gh >/dev/null 2>&1; then
-	# shellcheck disable=SC2086
-	gh release download $TAG --repo "$REPO" --pattern "$ASSET" --dir "$tmp" --clobber
+if ! command -v curl >/dev/null 2>&1; then
+	echo "slopball: curl is needed to download the release" >&2
+	exit 1
+fi
+# `releases/latest/download/<asset>` resolves the newest release server-side;
+# `releases/download/<tag>/<asset>` pins one. Both redirect to the asset store,
+# hence -L.
+if [ -n "$TAG" ]; then
+	url="https://github.com/$REPO/releases/download/$TAG/$ASSET"
 else
-	token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
-	if [ -z "$token" ]; then
-		echo "slopball: this repo is private — install the GitHub CLI (gh auth login) or set GITHUB_TOKEN." >&2
-		exit 1
-	fi
-	api="https://api.github.com/repos/$REPO/releases/latest"
-	[ -n "$TAG" ] && api="https://api.github.com/repos/$REPO/releases/tags/$TAG"
-	# The asset's API url, not browser_download_url: a private repo needs the
-	# token on the download itself, and only the API url accepts one.
-	url="$(curl -fsSL -H "Authorization: Bearer $token" -H "Accept: application/vnd.github+json" "$api" \
-		| tr ',' '\n' | grep -A0 '"url"' | grep "assets/" | head -1 | sed 's/.*"\(https[^"]*\)".*/\1/')"
-	if [ -z "$url" ]; then
-		echo "slopball: could not find asset $ASSET in the $REPO release." >&2
-		exit 1
-	fi
-	curl -fsSL -H "Authorization: Bearer $token" -H "Accept: application/octet-stream" -o "$tmp/$ASSET" "$url"
+	url="https://github.com/$REPO/releases/latest/download/$ASSET"
+fi
+echo "slopball: fetching $ASSET from $REPO ${TAG:+$TAG }release"
+if ! curl -fsSL -o "$tmp/$ASSET" "$url"; then
+	echo "slopball: download failed: $url" >&2
+	echo "slopball: is the release published, and does it carry $ASSET? https://github.com/$REPO/releases" >&2
+	exit 1
 fi
 
 if [ ! -f "$tmp/$ASSET" ]; then

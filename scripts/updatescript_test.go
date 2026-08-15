@@ -23,13 +23,15 @@ import (
 //
 //	curl <site>/update.sh | sh   →   curl <site>/install.sh | sh
 //
-// with a fake `gh` and `uname` underneath, the same stubs installer_test.go
-// uses. Nothing here reaches GitHub or the network.
+// with a fake `uname` and a fake `curl` underneath (installer_test.go's
+// writeFakeCurl, which answers the release URL itself and hands everything
+// else — the hop to the fake site — to the real curl). Nothing here reaches
+// GitHub.
 
 // updateEnv is one sandboxed run of scripts/update.sh against a fake site.
 type updateEnv struct {
 	t *testing.T
-	// dir is the sandbox root: dir/stub holds the fake uname+gh, dir/bin is
+	// dir is the sandbox root: dir/stub holds the fake uname+curl, dir/bin is
 	// where the "already installed" slopball lives.
 	dir  string
 	site *httptest.Server
@@ -51,17 +53,7 @@ func newUpdateEnv(t *testing.T, installed string) *updateEnv {
 		"  -m) echo x86_64 ;;\n"+
 		"  *) echo Linux ;;\n"+
 		"esac\n")
-	writeExec(t, filepath.Join(env.dir, "stub", "gh"), "#!/bin/sh\n"+
-		"pattern=; dir=.\n"+
-		"while [ $# -gt 0 ]; do\n"+
-		"  case \"$1\" in\n"+
-		"    --pattern) pattern=$2; shift 2 ;;\n"+
-		"    --dir|-D) dir=$2; shift 2 ;;\n"+
-		"    *) shift ;;\n"+
-		"  esac\n"+
-		"done\n"+
-		"[ -n \"$pattern\" ] || exit 1\n"+
-		"printf 'the new %s\\n' \"$pattern\" > \"$dir/$pattern\"\n")
+	writeFakeCurl(t, filepath.Join(env.dir, "stub"), filepath.Join(env.dir, "asked"), "the new %s")
 	if installed != "" {
 		writeExec(t, filepath.Join(env.dir, "bin", "slopball"), installed)
 	}

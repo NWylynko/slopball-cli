@@ -36,9 +36,13 @@ func repoRoot(t *testing.T) string {
 }
 
 // TestInstallShFetchesTheAssetForThisPlatform runs the installer for all four
-// released platforms with a fake `uname` and a fake `gh`, which is the only way
-// to prove the darwin half from linux. The fake gh records what was asked for,
-// so the assertion is on the ASSET NAME rather than on the script's own echo.
+// released platforms with a fake `uname` and a fake `curl`, which is the only
+// way to prove the darwin half from linux. The fake curl records which asset
+// URL was fetched, so the assertion is on the ASSET NAME rather than on the
+// script's own echo. The PATH carries no `gh` and the environment no token: the
+// repo is public (plan 49's flip, 2026-08-15) and the installer must need
+// neither — an anonymous curl on a bare machine is the whole point of a
+// one-line installer.
 func TestInstallShFetchesTheAssetForThisPlatform(t *testing.T) {
 	requireSh(t)
 	for _, tc := range []struct {
@@ -168,8 +172,9 @@ func TestTheBoxImageWorkflowFiresOnTheSameTag(t *testing.T) {
 	}
 }
 
-// installEnv is one sandboxed run of scripts/install.sh: a PATH carrying a fake
-// `uname` and a fake `gh`, and an install directory of its own.
+// installEnv is one sandboxed run of scripts/install.sh: a PATH carrying ONLY a
+// fake `uname`, a fake `curl` and the shell's own tools — no `gh`, no
+// GITHUB_TOKEN — and an install directory of its own.
 type installEnv struct {
 	t   *testing.T
 	dir string
@@ -192,20 +197,10 @@ func newInstallEnv(t *testing.T, unameS, unameM string) *installEnv {
 		"  -m) echo "+unameM+" ;;\n"+
 		"  *) echo "+unameS+" ;;\n"+
 		"esac\n")
-	// The fake release: `gh release download … --pattern <asset> --dir <dir>`
-	// writes a file whose contents name the asset, and records the pattern.
-	writeExec(t, filepath.Join(stub, "gh"), "#!/bin/sh\n"+
-		"pattern=; dir=.\n"+
-		"while [ $# -gt 0 ]; do\n"+
-		"  case \"$1\" in\n"+
-		"    --pattern) pattern=$2; shift 2 ;;\n"+
-		"    --dir|-D) dir=$2; shift 2 ;;\n"+
-		"    *) shift ;;\n"+
-		"  esac\n"+
-		"done\n"+
-		"[ -n \"$pattern\" ] || exit 1\n"+
-		"printf '%s\\n' \"$pattern\" > "+filepath.Join(dir, "asked")+"\n"+
-		"printf '%s\\n' \"$pattern\" > \"$dir/$pattern\"\n")
+	writeFakeCurl(t, stub, filepath.Join(dir, "asked"), "%s")
+	// `gh` is shadowed by a stub that refuses: the installer must not reach for
+	// it, because the machine it runs on usually does not have it.
+	writeExec(t, filepath.Join(stub, "gh"), "#!/bin/sh\necho 'fake gh: the installer must not use gh' >&2; exit 2\n")
 	return &installEnv{t: t, dir: dir}
 }
 
@@ -213,10 +208,20 @@ func (e *installEnv) run() (string, error) {
 	e.t.Helper()
 	root := repoRoot(e.t)
 	cmd := exec.Command("sh", filepath.Join(root, "scripts", "install.sh"))
-	cmd.Env = append(os.Environ(),
-		"PATH="+filepath.Join(e.dir, "stub")+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"SLOPBALL_INSTALL_DIR="+filepath.Join(e.dir, "bin"),
-	)
+	env := []string{
+		"PATH=" + filepath.Join(e.dir, "stub") + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"SLOPBALL_INSTALL_DIR=" + filepath.Join(e.dir, "bin"),
+		"HOME=" + e.dir,
+	}
+	// No credential reaches the script: a token in the developer's shell must not
+	// be what makes this pass.
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "GITHUB_TOKEN=") || strings.HasPrefix(kv, "GH_TOKEN=") || strings.HasPrefix(kv, "PATH=") || strings.HasPrefix(kv, "HOME=") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	cmd.Env = env
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
@@ -229,6 +234,37 @@ func (e *installEnv) asked() string {
 		e.t.Fatalf("the installer never asked the release for anything: %v", err)
 	}
 	return strings.TrimSpace(string(b))
+}
+
+// writeFakeCurl puts a `curl` on the stub PATH that answers a GitHub release
+// asset URL — `https://github.com/<repo>/releases/…/<asset>` — by writing a
+// file whose contents are bodyFmt applied to the asset name (the URL's last
+// path element), and recording that name to askedFile. Any other URL is passed
+// to the real curl untouched, which is how update.sh's hop through the fake
+// site keeps working. The release therefore never leaves the sandbox: with the
+// repo public, an unstubbed curl would quietly fetch the real latest release
+// and the test would pass by talking to GitHub.
+func writeFakeCurl(t *testing.T, stubDir, askedFile, bodyFmt string) {
+	t.Helper()
+	real, err := exec.LookPath("curl")
+	if err != nil {
+		t.Skip("no curl on this machine")
+	}
+	writeExec(t, filepath.Join(stubDir, "curl"), "#!/bin/sh\n"+
+		"out=; url=\n"+
+		"for a in \"$@\"; do\n"+
+		"  case \"$prev\" in -o) out=$a ;; esac\n"+
+		"  case \"$a\" in -*) ;; *) url=$a ;; esac\n"+
+		"  prev=$a\n"+
+		"done\n"+
+		"case \"$url\" in\n"+
+		"  https://github.com/*/releases/*)\n"+
+		"    [ -n \"$out\" ] || { echo 'fake curl: release fetched without -o' >&2; exit 2; }\n"+
+		"    asset=${url##*/}\n"+
+		"    printf '%s\\n' \"$asset\" > "+askedFile+"\n"+
+		"    printf '"+bodyFmt+"\\n' \"$asset\" > \"$out\" ;;\n"+
+		"  *) exec "+real+" \"$@\" ;;\n"+
+		"esac\n")
 }
 
 func writeExec(t *testing.T, path, body string) {

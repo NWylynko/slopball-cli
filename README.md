@@ -77,7 +77,7 @@ $ curl -fsSL https://slopball.wylynko.dev/install.sh | sh
 
 One static binary into `~/.local/bin` (set `SLOPBALL_INSTALL_DIR` for somewhere else). macOS and Linux, arm64 and amd64.
 
-> **While the repos are private**, the download itself is authenticated: install the GitHub CLI and `gh auth login`, or set `GITHUB_TOKEN`. The script says so if you have neither.
+No account, no token, no `gh` — it is a plain `curl` of the [latest release](https://github.com/nwylynko/slopball-cli/releases/latest). Pin a version with `SLOPBALL_VERSION=v1.0.0`.
 
 To update later:
 
