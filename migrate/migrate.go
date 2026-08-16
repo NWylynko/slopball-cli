@@ -13,6 +13,7 @@ import (
 	"github.com/nwylynko/slopball-cli/controlplane"
 	"github.com/nwylynko/slopball-cli/detect"
 	sbGit "github.com/nwylynko/slopball-cli/git"
+	"github.com/nwylynko/slopball-cli/gitserver"
 	"github.com/nwylynko/slopball-cli/netbind"
 )
 
@@ -45,6 +46,7 @@ type ProvisionedHost struct {
 // Survivor is a remaining client that can become host.
 type Survivor struct {
 	Name    string
+	Machine string // hostname, recorded as the session's host machine when this survivor is picked
 	Mirror  string // path to bare main mirror (fresh replica)
 	Work    string // client work tree (has outstanding branch)
 	Branch  string
@@ -59,6 +61,20 @@ type Request struct {
 	HostProvider HostProvider                              // optional escape hatch: used only when Survivors is empty
 	Pick         func(ranked []Survivor) (Survivor, error) // nil → pick ranked[0] (tests only)
 	DetectGone   func() bool                               // confirmation; nil → trust caller
+	// SessionNet, when set, puts the reconstructed canonical on the session
+	// network: the new host registers as the session's git holder and the
+	// control plane is told `slop://<pin>/git/canonical.git` — the address
+	// that names the ROLE — instead of this machine's listener.
+	//
+	// Without it Run publishes a machine address, which is what it did before
+	// the session network existed (plan 16), and what session wioqg5's
+	// survivor did on 2026-08-16: it took the git lease from a departed box and
+	// published http://127.0.0.1:63231/canonical.git into a shared control
+	// plane, so every later `slopball join` dialled its own localhost, and the
+	// conductor's forwarder — which names the role — found no holder. The
+	// caller that has a relay hands one in; a session with no relay still gets
+	// the direct address, as before.
+	SessionNet *gitserver.SessionNet
 }
 
 // Result of a completed migration.
@@ -121,12 +137,16 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 			return nil, err
 		}
 		host.Bind = bindFor(req.Control)
+		host.Session = req.SessionNet
 		url, _ := host.StartServer()
+		if su := host.SessionRemoteURL(); su != "" {
+			url = su
+		}
 		if url == "" {
 			url = host.Bare
 		}
 		if req.Control != nil {
-			if err := flipControl(ctx, req.Control, req.PIN, url); err != nil {
+			if err := flipControl(ctx, req.Control, req.PIN, url, "cloud:"+box.ID); err != nil {
 				return nil, err
 			}
 		}
@@ -159,12 +179,23 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 		return nil, err
 	}
 	host.Bind = bindFor(req.Control)
-	url, _ := host.StartServer()
+	host.Session = req.SessionNet
+	url, err := host.StartServer()
+	if req.SessionNet != nil && err != nil {
+		// On the session network a refused registration is the whole failure:
+		// publishing the loopback listener instead would make the session read
+		// as live while nobody off this machine can reach it (the same rule
+		// hoststart applies, for the same reason).
+		return nil, fmt.Errorf("serve the reconstructed canonical on the session network: %w", err)
+	}
+	if su := host.SessionRemoteURL(); su != "" {
+		url = su
+	}
 	if url == "" {
 		url = "file://" + host.Bare
 	}
 	if req.Control != nil {
-		if err := flipControl(ctx, req.Control, req.PIN, url); err != nil {
+		if err := flipControl(ctx, req.Control, req.PIN, url, chosen.Machine); err != nil {
 			return nil, err
 		}
 	}
@@ -183,14 +214,19 @@ func bindFor(cp *controlplane.Client) string {
 
 // flipControl announces the new canonical on the control plane.
 // TODO(plan 24): delegate to cutover.Flip once cutover accepts *controlplane.Client.
-func flipControl(ctx context.Context, cp *controlplane.Client, pin, newGitURL string) error {
+//
+// hostMachine names the machine canonical now lives on. The record used to
+// keep the departed host's name across a migration, so a joiner was told
+// `host=cloudchamber` by a session a laptop had been serving for minutes.
+func flipControl(ctx context.Context, cp *controlplane.Client, pin, newGitURL, hostMachine string) error {
 	sess, err := cp.Session(ctx, pin)
 	if err != nil {
 		return fmt.Errorf("migrate cutover session: %w", err)
 	}
 	if _, err := cp.Cutover(ctx, pin, controlplane.CutoverRequest{
-		NewGitURL:  newGitURL,
-		Generation: sess.Generation,
+		NewGitURL:   newGitURL,
+		Generation:  sess.Generation,
+		HostMachine: hostMachine,
 	}); err != nil {
 		return fmt.Errorf("migrate cutover: %w", err)
 	}

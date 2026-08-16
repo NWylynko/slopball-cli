@@ -26,6 +26,7 @@ import (
 	"github.com/nwylynko/slopball-cli/logx"
 	"github.com/nwylynko/slopball-cli/netbind"
 	"github.com/nwylynko/slopball-cli/placement"
+	"github.com/nwylynko/slopball-cli/runtime"
 	"github.com/nwylynko/slopball-cli/session"
 	"github.com/nwylynko/slopball-cli/syncengine"
 )
@@ -71,6 +72,8 @@ type Joined struct {
 	mu          sync.Mutex
 	canonical   *canonical.Host            // set once this member wins the git lease
 	dev         *devserver.Supervisor      // set once it wins dev
+	devHolder   *devserver.Holder          // its session-network publication, with the lease
+	devRuntime  *runtime.Reconciler        // announces the dev/demo endpoints once it listens
 	fleet       *conductor.Fleet           // set once it wins conductor
 	fleetHost   *canonical.Host            // what the fleet drives
 	publisher   *conductor.StatePublisher  // role state → control plane (plan 36 §2)
@@ -425,6 +428,7 @@ func (j *Joined) mirrorLoop() {
 					j.log.Debugf("placement: %v", err)
 				}
 			}
+			j.keepDevPublished(ctx)
 			j.ensureDevForwarder(ctx)
 			cancel()
 			if main != "" && main != lastMain {
@@ -725,6 +729,21 @@ func (j *Joined) Close() {
 	case <-j.stop:
 	default:
 		close(j.stop)
+	}
+	// Then stop what the leases had this machine serving — the dev process and
+	// its holder, the git registration, the canonical's listener — exactly as
+	// hoststart.Close does for a host. ReleaseAll hands the LEASES back; it
+	// does not touch the processes behind them, and a dev server that outlives
+	// its daemon holds the constant port against the next owner.
+	for _, svc := range controlplane.Services {
+		_ = j.stopService(context.Background(), svc)
+	}
+	j.mu.Lock()
+	host := j.canonical
+	j.canonical = nil
+	j.mu.Unlock()
+	if host != nil {
+		_ = host.Close(context.Background())
 	}
 	_ = session.ClearLive(j.Session.PIN)
 }

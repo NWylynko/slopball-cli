@@ -3,7 +3,9 @@ package joindaemon
 import (
 	"context"
 	"fmt"
+	"net"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,10 +15,15 @@ import (
 	"github.com/nwylynko/slopball-cli/detect"
 	"github.com/nwylynko/slopball-cli/devserver"
 	sbGit "github.com/nwylynko/slopball-cli/git"
+	"github.com/nwylynko/slopball-cli/gitserver"
 	"github.com/nwylynko/slopball-cli/harness"
+	"github.com/nwylynko/slopball-cli/hoststart"
 	"github.com/nwylynko/slopball-cli/migrate"
+	"github.com/nwylynko/slopball-cli/netbind"
 	"github.com/nwylynko/slopball-cli/placement"
 	"github.com/nwylynko/slopball-cli/runfile"
+	"github.com/nwylynko/slopball-cli/runtime"
+	"github.com/nwylynko/slopball-cli/sessionnet"
 )
 
 // newPlacementLoop builds this client's half of automatic placement (plan 30).
@@ -64,6 +71,15 @@ func (j *Joined) stopService(_ context.Context, service string) error {
 	defer j.mu.Unlock()
 	switch service {
 	case controlplane.ServiceDev:
+		// The relay registration goes with the lease, before the process: a
+		// holder still registered for a service this member no longer runs is
+		// the same lie as a held lease for a service it does not serve, and it
+		// locks the next owner out ("first live holder wins").
+		if j.devHolder != nil {
+			_ = j.devHolder.Close()
+			j.devHolder = nil
+		}
+		j.devRuntime = nil
 		if j.dev != nil {
 			_ = j.dev.Stop()
 			j.dev = nil
@@ -100,16 +116,26 @@ func (j *Joined) promoteToCanonical(ctx context.Context) error {
 		return nil
 	}
 	profile := detect.Probe()
+	// On the session network, or not at all: the address this member publishes
+	// is read by machines on other networks, so it has to name the session's
+	// git ROLE (slop://…) — the same registration the host it replaces held.
+	// A session with no relay keeps the direct address, as before.
+	sessNet, err := j.sessionNetFor(ctx, "git")
+	if err != nil {
+		return fmt.Errorf("promote mirror to canonical: %w", err)
+	}
 	res, err := migrate.Run(ctx, migrate.Request{
 		PIN: j.Session.PIN,
 		Survivors: []migrate.Survivor{{
 			Name:    strings.TrimPrefix(j.Session.Branch, "client/"),
+			Machine: hostnameOr("this machine"),
 			Mirror:  j.Paths.Mirror,
 			Work:    j.Paths.Work,
 			Branch:  j.Session.Branch,
 			Profile: profile,
 		}},
-		Control: j.Control,
+		Control:    j.Control,
+		SessionNet: sessNet,
 	})
 	if err != nil {
 		return fmt.Errorf("promote mirror to canonical: %w", err)
@@ -117,8 +143,39 @@ func (j *Joined) promoteToCanonical(ctx context.Context) error {
 	j.mu.Lock()
 	j.canonical = res.Canonical
 	j.mu.Unlock()
-	j.log.Infof("serving canonical for %s from this machine — %s", j.Session.PIN, res.Canonical.RemoteURL())
+	if su := res.Canonical.SessionRemoteURL(); su != "" {
+		j.log.Infof("serving canonical for %s from this machine — %s (session network; local listener %s)", j.Session.PIN, su, res.Canonical.RemoteURL())
+	} else {
+		j.log.Infof("serving canonical for %s from this machine — %s", j.Session.PIN, res.Canonical.RemoteURL())
+	}
 	return nil
+}
+
+// sessionNetFor is the join daemon's half of what hoststart.sessionNetFor is
+// for the host: the session-network registration a service this member takes
+// over must hold. nil, nil when the control plane names no relay — a
+// same-machine session, where the direct address is the address.
+func (j *Joined) sessionNetFor(ctx context.Context, service string) (*gitserver.SessionNet, error) {
+	sess, err := j.Control.Session(ctx, j.Session.PIN)
+	if err != nil {
+		return nil, err
+	}
+	if sess.RelayAddr == "" {
+		return nil, nil
+	}
+	key, err := sessionnet.ParseKey(sess.SessionKey)
+	if err != nil {
+		return nil, err
+	}
+	if key.Zero() {
+		return nil, fmt.Errorf("the control plane names relay %s but minted no session key", sess.RelayAddr)
+	}
+	bind := netbind.BindForControl(j.Control.Base)
+	return &gitserver.SessionNet{
+		Relay: sess.RelayAddr, PIN: sess.PIN, Key: key, Context: context.WithoutCancel(ctx),
+		Direct: hoststart.DirectIsPublishable(bind),
+		Ticket: j.Control.HolderTicket(sess.PIN, service),
+	}, nil
 }
 
 // startDev supervises the project's own dev command (plan 29's run.json) — the
@@ -146,14 +203,94 @@ func (j *Joined) startDev(ctx context.Context) error {
 		}
 	}
 	sup := &devserver.Supervisor{WorkDir: work, Command: dev, Logs: logs}
-	if err := sup.Start(ctx); err != nil {
+	// The process outlives this call: it rides the dev LEASE (stopService) or
+	// the daemon (Close), never the caller's context. That context is the
+	// mirror loop's 30s tick, and a supervisor started on it was killed at the
+	// end of the cycle that started it — restarted on the next, killed again.
+	if err := sup.Start(context.WithoutCancel(ctx)); err != nil {
 		return err
 	}
+	// Publish it the way the host publishes its own: a holder on the session
+	// network for the dev service, and the dev/demo endpoints announced once
+	// something is listening on the constant port (ticket 21). Without both,
+	// the control plane keeps whatever the previous owner published — for
+	// session wioqg5 that was the departed box's slop://…/dev, so every dial
+	// answered no-holder while this member held the lease and ran the process.
+	sess, err := j.Control.Session(ctx, j.Session.PIN)
+	if err != nil {
+		_ = sup.Stop()
+		return fmt.Errorf("start dev: read session: %w", err)
+	}
+	rt := &runtime.Reconciler{
+		WorkDir: work, Dev: sup, Control: j.Control, PIN: j.Session.PIN, Generation: sess.Generation,
+	}
+	var holder *devserver.Holder
+	if sessNet, err := j.sessionNetFor(ctx, "dev"); err != nil {
+		_ = sup.Stop()
+		return fmt.Errorf("start dev: %w", err)
+	} else if sessNet != nil {
+		port, why := runtime.LocalDevPort(work)
+		if port <= 0 {
+			_ = sup.Stop()
+			return fmt.Errorf("start dev: no local dev port to publish — %s", why)
+		}
+		opt := devserver.HolderOptions{
+			Relay: sessNet.Relay, PIN: sessNet.PIN, Key: sessNet.Key, LocalPort: port, Ticket: sessNet.Ticket,
+		}
+		if sessNet.Direct {
+			if dln, advHost, err := netbind.ListenAdvertise(netbind.BindForControl(j.Control.Base), 0); err == nil {
+				opt.DirectListener = dln
+				opt.DirectAdvertise = net.JoinHostPort(advHost, strconv.Itoa(dln.Addr().(*net.TCPAddr).Port))
+			}
+		}
+		h, err := devserver.StartHolder(context.WithoutCancel(ctx), opt)
+		if err != nil {
+			// A refused registration is the failure, not a degraded mode: the
+			// lease goes back so a member that can publish takes it.
+			_ = sup.Stop()
+			return fmt.Errorf("start dev: %w", err)
+		}
+		holder = h
+		rt.SetSessionDev(h.URL(), h.Direct())
+	}
 	j.mu.Lock()
-	j.dev = sup
+	j.dev, j.devHolder, j.devRuntime = sup, holder, rt
 	j.mu.Unlock()
+	rt.AnnounceDev(ctx)
 	j.log.Infof("dev server running here: %s", strings.Join(dev, " "))
 	return nil
+}
+
+// keepDevPublished is the dev owner's per-cycle duty, the same two things the
+// host loop does for its dev server (hoststart.KeepDevAlive): re-announce the
+// endpoint while the process is alive — publication waits for something to be
+// listening, and a cold start becomes listening after the first tick — and
+// restart a process that exited. Announced at the session's CURRENT
+// generation: this member's own git takeover bumps it, and an announcement at
+// the old one is rejected.
+func (j *Joined) keepDevPublished(ctx context.Context) {
+	j.mu.Lock()
+	sup, rt := j.dev, j.devRuntime
+	j.mu.Unlock()
+	if sup == nil || rt == nil {
+		return
+	}
+	if sess, err := j.Control.Session(ctx, j.Session.PIN); err == nil && sess.Generation > 0 {
+		rt.SetGeneration(sess.Generation)
+	}
+	if sup.Running() {
+		rt.AnnounceDev(ctx)
+		return
+	}
+	if !sup.NeedsRestart() {
+		return
+	}
+	if err := sup.Restart(context.WithoutCancel(ctx)); err != nil {
+		j.log.Warnf("dev server %q could not be restarted: %v", strings.Join(sup.Command, " "), err)
+		return
+	}
+	j.log.Infof("dev server %q had exited — restarted it", strings.Join(sup.Command, " "))
+	rt.AnnounceDev(ctx)
 }
 
 // startConductor runs the fleet against whatever canonical the session
