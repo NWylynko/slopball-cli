@@ -59,6 +59,13 @@ func DirectAddr(ln net.Listener) string {
 	return d.DirectAddr()
 }
 
+// ErrHolderBusy is the relay's "busy": another holder of this service is
+// registered and still answers ping. It is the one refusal a caller may
+// legitimately wait out — a takeover has demoted the incumbent and it stands
+// down on its next member cycle — where every other refusal is a
+// configuration to fix.
+var ErrHolderBusy = errors.New("busy — the previous holder is still registered")
+
 // Serve publishes Service on the session network and returns an ordinary
 // net.Listener whose accepted connections are already decrypted and
 // authenticated. Hand it to http.Serve, the git server, anything.
@@ -138,6 +145,9 @@ func (l *holderListener) registerOnce(ctx context.Context) (net.Conn, error) {
 		got := strings.TrimSpace(reply)
 		if got == "" {
 			got = fmt.Sprint(err)
+		}
+		if got == "busy" {
+			return nil, fmt.Errorf("sessionnet: relay refused registration of %s: %w", l.cfg.Service, ErrHolderBusy)
 		}
 		return nil, fmt.Errorf("sessionnet: relay refused registration of %s: %s", l.cfg.Service, got)
 	}

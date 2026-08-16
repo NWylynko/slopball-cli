@@ -322,6 +322,28 @@ func Start(ctx context.Context, opt Options) (*Running, error) {
 	if pin != "" {
 		overlay = "slop-" + pin + ".host"
 	}
+	// An empty-disk TAKEOVER seeds before it claims. The claim demotes the
+	// incumbent — deletes its leases, and it stands down at once, taking its
+	// relay registration with it — and the incumbent's canonical is exactly
+	// what an empty disk has to clone. Seeding after the claim raced the
+	// stand-down and lost: session wioqg5's replacement box died with
+	// "Recv failure: Connection reset by peer" mid-clone. So the clone lands
+	// first, on a session that is still being served, and the switch below
+	// then finds a canonical on disk and resumes it.
+	if opt.Takeover && pin != "" && opt.SeedURL == "" && !canonicalExists(session.ForPin(pin).Canonical) {
+		seedURL, err := reseedSource(ctx, client, pin, session.ReadMemberID(pin), log)
+		if err != nil {
+			return nil, err
+		}
+		if seedURL != "" {
+			log.Infof("no canonical on disk for %s — reseeding from the session's freshest replica at %s before taking over", pin, seedURL)
+			if _, err := seedFromRemote(ctx, session.ForPin(pin).Canonical, pin, seedURL); err != nil {
+				log.Errorf("canonical setup failed for %s: %v", pin, err)
+				return nil, err
+			}
+		}
+	}
+
 	claim, err := client.Claim(ctx, controlplane.ClaimRequest{
 		PIN: pin, HostMachine: hostname, LocalGeneration: localGen,
 		OverlayAddr: overlay,
@@ -412,6 +434,16 @@ func Start(ctx context.Context, opt Options) (*Running, error) {
 		sessNet = sn
 	}
 	gitURL, err := host.StartServer()
+	if err != nil && opt.Takeover && sessNet != nil && errors.Is(err, sessionnet.ErrHolderBusy) {
+		// A takeover has just DEMOTED the incumbent — the claim above deleted
+		// its leases — and it stands down on its next member cycle, taking its
+		// relay registration with it. Until then the relay is right to refuse
+		// us ("first live holder wins", ticket 15). This is a wait for that
+		// stand-down, not a retry loop: it ends when the slot frees or when the
+		// lease TTL has passed — after which the incumbent is not standing down
+		// and the refusal is real. Session wioqg5's replacement box died here.
+		gitURL, err = waitForIncumbentToStandDown(ctx, log, host, time.Duration(controlplane.DefaultLeaseTTL)*time.Second)
+	}
 	if err != nil {
 		// No bare-path fallback. `file://<host.Bare>` names a directory that
 		// exists on this machine only, so publishing it makes the session read
@@ -1479,6 +1511,29 @@ func sessionNetFor(ctx context.Context, sess controlplane.Session, bind string, 
 		Direct: DirectIsPublishable(bind),
 		Ticket: ticket,
 	}, nil
+}
+
+// waitForIncumbentToStandDown re-attempts the session-network registration
+// while the relay answers busy, up to bound. See the call site for why this
+// exists and why the bound is the lease TTL.
+func waitForIncumbentToStandDown(ctx context.Context, log *logx.Logger, host *canonical.Host, bound time.Duration) (string, error) {
+	log.Infof("the previous git holder is still registered — waiting for it to stand down (up to %s)", bound)
+	deadline := time.Now().Add(bound)
+	for {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+		url, err := host.StartServer()
+		if err == nil {
+			log.Infof("the previous git holder stood down — serving")
+			return url, nil
+		}
+		if !errors.Is(err, sessionnet.ErrHolderBusy) || time.Now().After(deadline) {
+			return "", err
+		}
+	}
 }
 
 // DirectIsPublishable decides whether this host has an address worth putting in

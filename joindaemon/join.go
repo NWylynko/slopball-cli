@@ -319,6 +319,13 @@ func (j *Joined) mirrorLoop() {
 				if e.Kind == "main.advanced" || e.Kind == "host.cutover" {
 					fetchNow = true
 				}
+				if e.Kind == "host.takeover" {
+					// A takeover freed every lease. Whatever this member was
+					// serving, it no longer holds — and the new host is
+					// waiting on the relay for our registration to go, so
+					// learn it now rather than on the next member cycle.
+					j.standDownWhatWasTaken()
+				}
 				if e.Kind == "host.cutover" {
 					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 					j.log.Infof("host.cutover — following new canonical")
@@ -441,6 +448,35 @@ func (j *Joined) mirrorLoop() {
 			}
 		}
 	}
+}
+
+// standDownWhatWasTaken asks the control plane which of this member's leases
+// are no longer its own — one member sync, off-cycle — and stands those
+// services down. Called on host.takeover: the store deletes every lease with
+// the demotion, and the returning host cannot register on the relay while
+// this member's registration is still up.
+func (j *Joined) standDownWhatWasTaken() {
+	if j.Outbox == nil || j.Placement == nil {
+		return
+	}
+	held := false
+	for _, svc := range controlplane.Services {
+		if j.Placement.HoldsService(svc) {
+			j.Outbox.Hold(svc)
+			held = true
+		}
+	}
+	if !held {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	res, err := j.Outbox.Flush(ctx)
+	if err != nil {
+		j.log.Debugf("stand down after takeover: %v", err)
+		return
+	}
+	j.Placement.ApplyLost(ctx, res.Lost)
 }
 
 // Fleet is the conductor fleet this member currently runs, or nil when it does
