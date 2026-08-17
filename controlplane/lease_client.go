@@ -171,3 +171,19 @@ func (c *Client) leaseCall(ctx context.Context, method, path string, body any) (
 func trimLeaseErr(s string) string {
 	return strings.TrimPrefix(strings.TrimSpace(s), ErrLeaseHeld.Error()+": ")
 }
+
+// ReportBoxBootFailure tells the control plane that this managed box could not
+// boot, and why, so the box record says `failed` with a reason within seconds
+// instead of `provisioning` until the provisioner's own deadline.
+//
+// Only a member whose role is `box` may send it — the caller is the container
+// the control plane minted the membership for — and it is never fatal to the
+// thing it is reporting: a box that cannot reach the control plane to say it is
+// dying is still dying, and the exit must not be held up by saying so.
+func (c *Client) ReportBoxBootFailure(ctx context.Context, pin, memberID, reason string) error {
+	if pin == "" || memberID == "" {
+		return fmt.Errorf("box boot failure needs the pin and the box's member id")
+	}
+	return c.do(ctx, http.MethodPost, "/v1/sessions/"+pin+"/box/boot-failed",
+		BoxBootFailure{Reason: reason}, nil)
+}

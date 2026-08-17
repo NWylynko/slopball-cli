@@ -252,6 +252,25 @@ func (b BoxFacts) Pending() bool {
 	return b.State == BoxRequested || b.State == BoxProvisioning
 }
 
+// BoxBootFailure is what a managed box POSTs to `…/box/boot-failed` when it
+// cannot come up at all: the one sentence saying why, sent under its own box
+// membership, before the process stops.
+//
+// It exists because a box that dies on boot used to be indistinguishable from
+// one still starting. Session 2lmymb's replacement box exited five seconds in
+// and the record said `provisioning` with an empty error for the provisioner's
+// whole eight-minute deadline, at which point the session was told the generic
+// "the box never claimed" — the reason having been written only to a container
+// stdout nobody in this repo can read.
+//
+// Deliberately NOT a member.left: leaving is what a healthy box does when the
+// platform stops it, and the control plane answers that by starting the box
+// again. A boot failure that reported itself as a leave would restart the
+// container into the same failure until the auto-restart cap ran out.
+type BoxBootFailure struct {
+	Reason string `json:"reason"`
+}
+
 // BoxRequest is what a client asks the control plane to provision. It carries
 // only what the box cannot work out for itself — no ssh target, no pull policy,
 // no binary. Those are the control plane's business now.

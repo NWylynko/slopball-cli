@@ -72,6 +72,9 @@ func Render(w io.Writer, header string, all []Status) {
 		if s.GitPath != "" {
 			notes = append(notes, "via "+s.GitPath)
 		}
+		if s.Box != "" {
+			notes = append(notes, "box "+s.Box)
+		}
 		if s.Note != "" {
 			notes = append(notes, "! "+s.Note)
 		}

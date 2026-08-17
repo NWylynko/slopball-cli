@@ -41,6 +41,15 @@ type Status struct {
 	DevURL  string
 	DevUp   bool
 	Note    string
+	// Box is the session's managed box in one phrase — "ready (cloudflare)",
+	// "provisioning…", or "failed — <why>". Blank when the session has no box.
+	//
+	// The failure half is the reason this field exists: a box that dies on boot
+	// is a session missing the machine that was going to host it, and the only
+	// place that fact is written down is the box record. Session 2lmymb spent
+	// eight minutes with a dead box and every human-facing surface either
+	// silent or saying "provisioning…".
+	Box string
 	// Services is where each leased service currently runs (plan 30), keyed by
 	// service name. Once services can move on their own, "where is everything
 	// right now?" has to be a question with a one-glance answer.
@@ -167,6 +176,7 @@ func statusFor(ctx context.Context, home, pin string, client *controlplane.Clien
 				st.DevURL = devURL
 				st.DevUp = reach.ProbeSessionService(ctx, client, sess, pin, reach.ServiceDev).Reachable
 			}
+			st.Box = boxLine(sess.Box)
 			if sess.Convergence != nil {
 				if st.Main == "-" && sess.Convergence.MainSHA != "" {
 					st.Main = short(sess.Convergence.MainSHA)
@@ -254,4 +264,32 @@ func forPin(home, pin string) session.Paths {
 		Mirror:    filepath.Join(root, "mirror"),
 		Work:      filepath.Join(root, "work"),
 	}
+}
+
+// boxLine is the session's box in one phrase, or "" when it has none.
+//
+// The failure carries its reason: the whole point of asking the monitor about a
+// session whose box is not there is finding out what happened to it, and
+// "failed" on its own is the same silence with a label on it.
+func boxLine(b *controlplane.BoxFacts) string {
+	if b == nil || b.State == "" {
+		return ""
+	}
+	if b.State == controlplane.BoxFailed {
+		why := strings.TrimSpace(b.Error)
+		if i := strings.IndexAny(why, "\r\n"); i >= 0 {
+			why = why[:i]
+		}
+		if why == "" {
+			why = "no reason recorded"
+		}
+		return "failed — " + why
+	}
+	if b.Pending() {
+		return "provisioning…"
+	}
+	if b.Provider != "" {
+		return b.State + " (" + b.Provider + ")"
+	}
+	return b.State
 }

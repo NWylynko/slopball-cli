@@ -36,6 +36,7 @@ import (
 	"github.com/nwylynko/slopball-cli/session"
 	"github.com/nwylynko/slopball-cli/sessionnet"
 	"github.com/nwylynko/slopball-cli/syncengine"
+	"github.com/nwylynko/slopball-cli/telemetry"
 )
 
 // ErrJoinAsClient means the control plane says this machine must join as a client
@@ -245,7 +246,7 @@ func (r *Running) Generation() int { return int(r.gen.Load()) }
 // An empty opt.PIN is a create: the control plane mints the name and this
 // process uses what comes back (abuse-surface ticket 11). A handed PIN
 // (box boot, resume, takeover) is validated and presented as before.
-func Start(ctx context.Context, opt Options) (*Running, error) {
+func Start(ctx context.Context, opt Options) (r *Running, err error) {
 	pin := opt.PIN
 	handed := pin != ""
 	if handed {
@@ -264,6 +265,10 @@ func Start(ctx context.Context, opt Options) (*Running, error) {
 	if client == nil {
 		client = controlplane.NewClient(controlplane.BaseURL(""))
 	}
+	// The membership a provisioner handed this container, when it handed one.
+	// Empty on every laptop, which is what makes the box-only paths below
+	// unreachable from one.
+	boxMemberID := ""
 
 	// Say out loud whether the control plane answered. Printing its URL and
 	// carrying on (the old behaviour) left the operator unable to tell a live
@@ -293,6 +298,28 @@ func Start(ctx context.Context, opt Options) (*Running, error) {
 		// already claimed something would otherwise keep presenting that and
 		// silently ignore the identity this box was invited under.
 		client.RememberMembership(pin, id, secret)
+		boxMemberID = id
+
+		// From here on this box's own narration is recorded. A member's
+		// telemetry is normally pointed at the session by the member CYCLE,
+		// which does not run until after Claim — so a box that died on the way
+		// to Claim recorded nothing at all, which is exactly what session
+		// 2lmymb's replacement did (zero envelopes for m_1ca52326). One cycle
+		// now, before the boot can fail, because a managed box always records
+		// and its boot is the part no laptop's console ever sees.
+		recordFromBootOnwards(ctx, client, pin, id, log)
+
+		// And a boot that fails from here says so on its way out: to the ingest
+		// (drained, because the process is about to stop) and to the control
+		// plane, whose box record would otherwise say `provisioning` until the
+		// provisioner's own deadline. Deferred rather than written at each
+		// fatal return — there are a dozen of those and the next one added must
+		// not be the one that goes quiet again.
+		defer func() {
+			if err != nil {
+				reportBoxBootFailure(ctx, client, pin, boxMemberID, err, log)
+			}
+		}()
 	}
 
 	// A control plane on another machine means peers may want a *direct*
@@ -331,16 +358,10 @@ func Start(ctx context.Context, opt Options) (*Running, error) {
 	// first, on a session that is still being served, and the switch below
 	// then finds a canonical on disk and resumes it.
 	if opt.Takeover && pin != "" && opt.SeedURL == "" && !canonicalExists(session.ForPin(pin).Canonical) {
-		seedURL, err := reseedSource(ctx, client, pin, session.ReadMemberID(pin), log)
-		if err != nil {
+		if _, err := seedFromLiveReplica(ctx, client, pin, session.ReadMemberID(pin),
+			session.ForPin(pin).Canonical, "before taking over", log); err != nil {
+			log.Errorf("canonical setup failed for %s: %v", pin, err)
 			return nil, err
-		}
-		if seedURL != "" {
-			log.Infof("no canonical on disk for %s — reseeding from the session's freshest replica at %s before taking over", pin, seedURL)
-			if _, err := seedFromRemote(ctx, session.ForPin(pin).Canonical, pin, seedURL); err != nil {
-				log.Errorf("canonical setup failed for %s: %v", pin, err)
-				return nil, err
-			}
 		}
 	}
 
@@ -389,17 +410,13 @@ func Start(ctx context.Context, opt Options) (*Running, error) {
 		// question is never "create?" but "has this session got history
 		// somewhere else?". Creating on top of a session that does is the one
 		// failure reachability can never see: an empty repo answers perfectly.
-		var seedURL string
-		seedURL, err = reseedSource(ctx, client, pin, claim.MemberID, log)
-		switch {
-		case err != nil:
+		host, err = seedFromLiveReplica(ctx, client, pin, claim.MemberID, paths.Canonical, "", log)
+		if err != nil {
 			// Loud and fatal. The git lease and the git endpoint are both taken
 			// further down, so nothing has been published on the way here.
 			return nil, err
-		case seedURL != "":
-			log.Infof("no canonical on disk for %s — reseeding from the session's freshest replica at %s", pin, seedURL)
-			host, err = seedFromRemote(ctx, paths.Canonical, pin, seedURL)
-		default:
+		}
+		if host == nil {
 			log.Infof("creating fresh canonical for %s at %s", pin, paths.Canonical)
 			host, err = canonical.Create(ctx, paths.Canonical, pin)
 		}
@@ -647,7 +664,7 @@ func Start(ctx context.Context, opt Options) (*Running, error) {
 		}
 	}
 
-	r := &Running{
+	r = &Running{
 		PIN: pin, Host: host, Fleet: fleet, Runtime: rt, Dev: dev,
 		Control: client, GitURL: gitURL, GitDirect: host.Srv.SessionDirect(),
 		DemoURL:    "file://" + host.Work,
@@ -1398,10 +1415,10 @@ func seedFromDir(ctx context.Context, host *canonical.Host, dir string) error {
 //
 // A session that HAS history and offers no live replica is dead, and says so.
 // Creating there is the lie this exists to delete.
-func reseedSource(ctx context.Context, client *controlplane.Client, pin, self string, log *logx.Logger) (string, error) {
+func reseedSource(ctx context.Context, client *controlplane.Client, pin, self string, log *logx.Logger) (string, string, error) {
 	sess, err := client.Session(ctx, pin)
 	if err != nil {
-		return "", fmt.Errorf("no canonical on disk for %s and the control plane could not say whether the session has any: %w", pin, err)
+		return "", "", fmt.Errorf("no canonical on disk for %s and the control plane could not say whether the session has any: %w", pin, err)
 	}
 	hadHistory := sess.Convergence != nil && sess.Convergence.MainSHA != ""
 	var freshest *controlplane.Member
@@ -1419,20 +1436,179 @@ func reseedSource(ctx context.Context, client *controlplane.Client, pin, self st
 		}
 	}
 	if !hadHistory {
-		return "", nil
+		return "", "", nil
 	}
 	if freshest == nil {
-		return "", fmt.Errorf("no canonical on disk for %s and no live member holds a replica of main — "+
+		return "", "", fmt.Errorf("no canonical on disk for %s and no live member holds a replica of main — "+
 			"this session's code is gone from every machine that is still here. Nothing was published: "+
 			"a fresh empty canonical would look healthy and serve nobody's work", pin)
 	}
+	who := fmt.Sprintf("%s (height %d)", freshest.Name, freshest.MainMirrorHeight)
 	url, err := client.EndpointURL(ctx, pin, controlplane.EndpointGit)
 	if err != nil {
-		return "", fmt.Errorf("no canonical on disk for %s and the session's git endpoint could not be resolved to seed from "+
+		return "", who, fmt.Errorf("no canonical on disk for %s and the session's git endpoint could not be resolved to seed from "+
 			"(%s holds the freshest replica at height %d): %w", pin, freshest.Name, freshest.MainMirrorHeight, err)
 	}
 	log.Infof("%s: seeding from %s (freshest replica, height %d)", pin, freshest.Name, freshest.MainMirrorHeight)
-	return url, nil
+	return url, who, nil
+}
+
+// recordFromBootOnwards points this container's telemetry at the session before
+// anything can go wrong, by running one ordinary member cycle.
+//
+// The cycle is the one call that already holds all four facts a client emitter
+// needs — the pin, the session uid, this member's id and a fresh relay ticket —
+// so pointing telemetry is its side effect and there is no second door onto it
+// (docs/telemetry.md, plan 46 ticket 13). A box normally reaches that cycle
+// only after it has claimed the session; this runs one first, because
+// everything between planting the membership and claiming — resolving the
+// session, deciding whether to seed, cloning canonical — is precisely the part
+// of a box's life that failed on session 2lmymb and was recorded nowhere.
+//
+// Never fatal, and never even an error return: telemetry is not allowed to be
+// load-bearing, so a control plane that refuses this leaves a box that boots
+// exactly as it did before and narrates to its own stdout.
+func recordFromBootOnwards(ctx context.Context, client *controlplane.Client, pin, memberID string, log *logx.Logger) {
+	if memberID == "" {
+		return
+	}
+	cycleCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if _, err := client.MemberSync(cycleCtx, pin, memberID, controlplane.MemberSync{WantSnapshot: true}); err != nil {
+		log.Warnf("%s: this box could not run its first member cycle (%v) — it is booting anyway, and until it claims "+
+			"nothing it logs will reach the session's telemetry", pin, err)
+	}
+}
+
+// reportBoxBootFailure is what a managed box does instead of dying quietly.
+//
+// Two audiences, one on the way out. The INGEST gets the reason as an ordinary
+// log line and is then drained — the emitter delivers in the background, so a
+// process that exits on a boot error otherwise takes the one envelope that
+// mattered with it. The CONTROL PLANE gets it as a fact on the box record, so
+// `slopball monitor` and the console say "box failed — <why>" within seconds
+// rather than "provisioning…" until the provisioner gives up eight minutes
+// later and reports a timeout instead of a cause.
+//
+// Neither may hold the exit up for long and neither may replace the error: this
+// reports, and Start still returns exactly what went wrong.
+func reportBoxBootFailure(ctx context.Context, client *controlplane.Client, pin, memberID string, cause error, log *logx.Logger) {
+	var joinInstead *ErrJoinAsClient
+	if errors.As(cause, &joinInstead) {
+		return // not a failure: the control plane told this machine to join instead
+	}
+	log.Errorf("this box cannot host %s and is stopping: %v", pin, cause)
+	if memberID != "" {
+		// WithoutCancel: a boot that failed because the context died must still
+		// be able to say so, and this is the last chance anything has to.
+		sayCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		if err := client.ReportBoxBootFailure(sayCtx, pin, memberID, cause.Error()); err != nil {
+			log.Warnf("%s: the control plane was not told why this box could not boot (%v) — its record will say "+
+				"provisioning until the provisioner's own deadline", pin, err)
+		}
+		cancel()
+	}
+	// Last, because it takes the log sink out: everything above is still
+	// recorded, and the queue is drained before the process stops.
+	telemetry.StopMember()
+}
+
+// BoxSeedWait bounds how long an empty-disk takeover waits for somebody to
+// serve the session's git before it gives up.
+//
+// It is the provisioner's own readiness deadline (cloudbox's
+// defaultBoxReadyTimeout, pinned equal by cloudbox.TestTheBoxWaitsNoLongerToSeed
+// ThanItsProvisionerWaitsForIt): a box that waited past it would still be
+// waiting when the control plane had already written the boot off as failed.
+const BoxSeedWait = 8 * time.Minute
+
+// seedFromLiveReplica is the empty-disk seed, and the wait that has to be part
+// of it. It returns a seeded canonical, or (nil, nil) when the session has no
+// history anywhere and the caller should create one.
+//
+// Session 2lmymb (2026-08-17): the control plane starts a replacement box
+// within milliseconds of the old one leaving, so the replacement boots into a
+// window where the session's git ENDPOINT is still the departed box's and no
+// member has yet claimed — let alone started serving — git. The survivor laptop
+// took 28 seconds. The replacement cloned once through the relay, was told
+// `no live git holder — nobody is serving it right now`, and exited 1 five
+// seconds after it started.
+//
+// So a miss is not fatal, it is the ordinary shape of coming back: the takeover
+// this box is waiting for is one the control plane is already reporting. What
+// is waited ON is that observation — a live git lease held by somebody else —
+// read on the member cadence this box is about to run at anyway, and bounded by
+// BoxSeedWait so a session nobody ever serves ends in a sentence rather than a
+// hang.
+func seedFromLiveReplica(ctx context.Context, client *controlplane.Client, pin, self, root, when string, log *logx.Logger) (*canonical.Host, error) {
+	seedURL, freshest, err := reseedSource(ctx, client, pin, self, log)
+	if err != nil || seedURL == "" {
+		return nil, err
+	}
+	if when != "" {
+		when = " " + when
+	}
+	log.Infof("no canonical on disk for %s — reseeding from the session's freshest replica at %s%s", pin, seedURL, when)
+	host, err := seedFromRemote(ctx, root, pin, seedURL)
+	if err == nil {
+		return host, nil
+	}
+	log.Warnf("%s: nothing is serving the session's git yet (%v) — waiting up to %s for a member to take it over",
+		pin, err, BoxSeedWait)
+	return waitForAGitHolderThenSeed(ctx, client, pin, self, root, freshest, err, log)
+}
+
+// waitForAGitHolderThenSeed retries the seed while the session is between git
+// holders. It attempts only when the control plane reports a LIVE git lease
+// held by somebody other than this machine — cloning into a session nobody
+// holds is the request that failed on the way in — and every attempt re-resolves
+// the endpoint, so a holder that publishes a new address is followed.
+func waitForAGitHolderThenSeed(ctx context.Context, client *controlplane.Client, pin, self, root, freshest string, lastErr error, log *logx.Logger) (*canonical.Host, error) {
+	wctx, cancel := context.WithTimeout(ctx, BoxSeedWait)
+	defer cancel()
+	said := ""
+	for {
+		select {
+		case <-wctx.Done():
+			return nil, fmt.Errorf("no canonical on disk for %s and nobody served the session's git within %s "+
+				"(%s holds the freshest replica) — refusing to publish an empty canonical over it. Last attempt: %w",
+				pin, BoxSeedWait, freshest, lastErr)
+		case <-time.After(controlplane.MemberCycle):
+		}
+		sess, err := client.Session(wctx, pin)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		holder, ok := sess.Leases[controlplane.ServiceGit]
+		if !ok || holder.Owner == "" || holder.Owner == self || !holder.Live(time.Now()) {
+			if said != "nobody" {
+				said = "nobody"
+				log.Infof("%s: still nobody holds the session's git — %s has the freshest replica", pin, freshest)
+			}
+			continue
+		}
+		seedURL, err := client.EndpointURL(wctx, pin, controlplane.EndpointGit)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		who := holder.OwnerName
+		if who == "" {
+			who = holder.Owner
+		}
+		if said != who {
+			said = who
+			log.Infof("%s: %s holds the session's git now — seeding from %s", pin, who, seedURL)
+		}
+		host, err := seedFromRemote(wctx, root, pin, seedURL)
+		if err == nil {
+			log.Infof("%s: seeded from %s", pin, who)
+			return host, nil
+		}
+		lastErr = err
+		log.Debugf("%s: %s holds git but is not serving it yet (%v) — retrying", pin, who, err)
+	}
 }
 
 // requireHistory is the ordering rule made mechanical: the git endpoint is
@@ -1459,6 +1635,14 @@ func seedFromRemote(ctx context.Context, root, pin, url string) (*canonical.Host
 	bare := filepath.Join(abs, canonical.BareDir)
 	work := filepath.Join(abs, canonical.WorkDir)
 	if err := sbGit.Run(ctx, "", "clone", "--bare", url, bare); err != nil {
+		// Leave nothing behind. git usually removes a directory it created and
+		// failed in, but "usually" is not good enough now that this is retried
+		// while a session changes git holders: a half-written bare.git makes
+		// every later attempt fail on "destination path already exists", and
+		// canonicalExists would then read it as a canonical to resume.
+		if rmErr := os.RemoveAll(bare); rmErr != nil {
+			return nil, fmt.Errorf("seed from url: %w (and the partial clone at %s could not be removed: %v)", err, bare, rmErr)
+		}
 		return nil, fmt.Errorf("seed from url: %w", err)
 	}
 	_ = sbGit.Run(ctx, bare, "config", "http.receivepack", "true")
