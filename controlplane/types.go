@@ -304,6 +304,37 @@ type Lease struct {
 	Generation int       `json:"generation"`
 	ExpiresAt  time.Time `json:"expiresAt"`
 	UpdatedAt  time.Time `json:"updatedAt,omitempty"`
+	// StartFailure is the last member that held this lease and could not start
+	// the service. It rides the LEASE rather than convergence because all three
+	// services fail this way — dev has flapped on "this project declares no dev
+	// command" since plan 30 — and because the lease is the one row that is
+	// already per-service and already read by everything that renders placement.
+	StartFailure *StartFailure `json:"startFailure,omitempty"`
+}
+
+// StartFailure is one visible, durable fact: a member took a service's lease,
+// could not start the service, and handed the lease back. Session 2lmymb spent
+// eleven minutes with the conductor lease flapping every five seconds and this
+// fact existing nowhere but one laptop's stdout, so the machine and the reason
+// travel together and are read straight out of the session document.
+type StartFailure struct {
+	MemberID string    `json:"memberId,omitempty"`
+	Name     string    `json:"name,omitempty"`
+	Machine  string    `json:"machine,omitempty"`
+	Reason   string    `json:"reason"`
+	At       time.Time `json:"at,omitzero"`
+}
+
+// Line is the one sentence every surface shows — console, monitor, log.
+func (f StartFailure) Line(service string) string {
+	who := f.Name
+	if who == "" {
+		who = f.MemberID
+	}
+	if f.Machine != "" {
+		who += "@" + f.Machine
+	}
+	return service + ": " + who + " can't start it — " + f.Reason
 }
 
 // Live reports whether the lease is still held. An unowned or expired lease is
@@ -321,6 +352,9 @@ type LeaseRequest struct {
 	TTLSeconds int    `json:"ttlSeconds,omitempty"`
 	// To hands the lease to a specific member (graceful transfer).
 	To string `json:"to,omitempty"`
+	// StartFailReason is why the member could not start the service it just
+	// took, sent with the `start-failed` release. Only that action reads it.
+	StartFailReason string `json:"startFailReason,omitempty"`
 	// Force takes a LIVE lease from its owner. The escape hatch for a wedged
 	// owner and nothing else — automatic placement never sets it.
 	Force bool `json:"force,omitempty"`
@@ -395,6 +429,13 @@ const (
 	EventSyncPushed   = "sync.pushed"
 	EventMergeApplied = "merge.applied"
 )
+
+// EventPlacementFailed is server-derived, like role.working: the store appends
+// it when a member reports that it took a service's lease and could not start
+// the service. It is deliberately NOT in PublishableEvents — a member does not
+// post it, it reports the failure and the store decides what the session's feed
+// says about it.
+const EventPlacementFailed = "placement.failed"
 
 // PublishableEvents is every kind a session member may append directly.
 var PublishableEvents = map[string]bool{

@@ -3,8 +3,10 @@ package placement
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nwylynko/slopball-cli/controlplane"
 	"github.com/nwylynko/slopball-cli/logx"
@@ -65,6 +67,18 @@ type Loop struct {
 	mu       sync.Mutex
 	held     map[string]bool
 	unplaced map[string]string
+	// failed is what this member could not start, keyed by service: the reason,
+	// and the session fingerprint it failed against. It is the whole anti-flap
+	// rule — see StateFingerprint — and it is per-process state on purpose: the
+	// control plane holds the FACT (Lease.StartFailure), this holds the decision
+	// not to try again yet.
+	failed map[string]startFailure
+}
+
+// startFailure is one service's last failed start on this machine.
+type startFailure struct {
+	fingerprint string
+	reason      string
 }
 
 // HoldsService reports whether this member currently serves the service.
@@ -109,24 +123,126 @@ func (l *Loop) Tick(ctx context.Context) error {
 }
 
 func (l *Loop) reconcile(ctx context.Context, sess controlplane.Session, service string, now time.Time) error {
-	switch {
-	case l.HoldsService(service):
+	if l.HoldsService(service) {
 		return l.renew(ctx, service)
-	case l.Serves != nil && !l.Serves(service):
+	}
+	if l.Serves != nil && !l.Serves(service) {
 		// Not ours to run. Note who is (or that nobody is) and move on — silence
 		// here is how a session ends up with an unplaced service nobody reports.
 		l.noteUnplaced(sess, service, now)
 		return nil
-	case Holds(sess, service, l.MemberID, now):
-		// The control plane says this is ours but we are not serving it — a
-		// restart, or a Start that failed earlier. Bring it up.
-		return l.take(ctx, service, "resuming a lease this machine still holds")
-	case ShouldClaim(sess, service, l.MemberID, now):
-		return l.take(ctx, service, l.claimReason(sess, service, now))
-	default:
+	}
+	// The control plane saying this is ours while we are not serving it is a
+	// restart, or a Start that failed earlier; ShouldClaim is the free-lease
+	// race. Both end in take().
+	mine := Holds(sess, service, l.MemberID, now)
+	if !mine && !ShouldClaim(sess, service, l.MemberID, now) {
 		l.noteUnplaced(sess, service, now)
 		return nil
 	}
+	fp := StateFingerprint(sess)
+	if reason, stuck := l.stillFailing(service, fp); stuck {
+		// Nothing that produced the failure has moved, so trying again would
+		// produce the same error and the same lease flap. The lease still goes
+		// back — another member may well be able to run this.
+		log.Debugf("%s: not retrying here, nothing changed since %q", service, reason)
+		if mine {
+			l.reportStartFailure(ctx, service, reason)
+		}
+		return nil
+	}
+	if mine {
+		return l.take(ctx, service, fp, "resuming a lease this machine still holds")
+	}
+	return l.take(ctx, service, fp, l.claimReason(sess, service, now))
+}
+
+// stillFailing reports the remembered reason when this member already failed to
+// start the service against exactly this session state.
+func (l *Loop) stillFailing(service, fingerprint string) (string, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	f, ok := l.failed[service]
+	return f.reason, ok && f.fingerprint == fingerprint
+}
+
+// noteStartFailure records the failure and answers whether it is NEW — a
+// different reason from the last one this machine reported for the service.
+// Only a new reason is worth a line: the same sentence every five seconds is
+// what buried the git error in session 2lmymb.
+func (l *Loop) noteStartFailure(service, fingerprint, reason string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.failed == nil {
+		l.failed = map[string]startFailure{}
+	}
+	was := l.failed[service]
+	l.failed[service] = startFailure{fingerprint: fingerprint, reason: reason}
+	return was.reason != reason
+}
+
+// forgetStartFailure drops the memory once the service starts here.
+func (l *Loop) forgetStartFailure(service string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.failed, service)
+}
+
+// reportStartFailure hands the lease back AND says why, in one request. The
+// pair is the point: a release with no reason is exactly the state the control
+// plane was in while the conductor lease flapped 170 times.
+func (l *Loop) reportStartFailure(ctx context.Context, service, reason string) {
+	if err := l.Control.ReportStartFailure(ctx, l.PIN, controlplane.LeaseRequest{
+		Service: service, MemberID: l.MemberID, Name: l.Name, Machine: l.Machine,
+		StartFailReason: reason,
+	}); err != nil {
+		log.Debugf("reporting the %s start failure: %v", service, err)
+	}
+}
+
+// oneLine flattens a command failure into something a dashboard cell can hold:
+// what we were doing, then the sentence that says why it did not work.
+//
+// Cutting the string at a length bound is not enough and the incident proves
+// it — a failed clone is "mirror canonical from <url>: git clone --mirror <url>
+// <path>: Cloning into '<path>'… warning: templates not found… fatal: unable to
+// access <url>: Failed to connect", and the only words a human needs are the
+// last twelve. So the `fatal:`/`error:` line is carried explicitly and the
+// context is what gets trimmed.
+func oneLine(err error) string {
+	lines := strings.Split(err.Error(), "\n")
+	head := flattenLine(lines[0])
+	why := ""
+	for _, l := range lines[1:] {
+		if t := flattenLine(l); strings.HasPrefix(t, "fatal:") || strings.HasPrefix(t, "error:") {
+			why = t
+			break
+		}
+	}
+	if why == "" {
+		return clampLine(head, controlplane.StartFailReasonMax)
+	}
+	why = clampLine(why, controlplane.StartFailReasonMax)
+	room := controlplane.StartFailReasonMax - len(why) - len(" — ")
+	if room <= 0 {
+		return why
+	}
+	return clampLine(head, room) + " — " + why
+}
+
+func flattenLine(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+func clampLine(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	// On a rune boundary: a byte-sliced multi-byte path would make the whole
+	// report a postgres error about invalid UTF-8, which is a worse outcome
+	// than a slightly shorter sentence.
+	for max > 0 && !utf8.RuneStart(s[max]) {
+		max--
+	}
+	return s[:max] + "…"
 }
 
 // claimReason names what freed the service, so the log line explains a takeover
@@ -147,7 +263,7 @@ func (l *Loop) claimReason(sess controlplane.Session, service string, now time.T
 // second git server for a session that already has one is the failure mode
 // worth avoiding. A Start that fails releases the lease again, so the next-best
 // member gets its turn instead of the service being held by nobody serving it.
-func (l *Loop) take(ctx context.Context, service, why string) error {
+func (l *Loop) take(ctx context.Context, service, fingerprint, why string) error {
 	if _, err := l.Control.ClaimLease(ctx, l.PIN, controlplane.LeaseRequest{
 		Service: service, MemberID: l.MemberID, Name: l.Name, Machine: l.Machine,
 		TTLSeconds: l.ttl(),
@@ -162,11 +278,19 @@ func (l *Loop) take(ctx context.Context, service, why string) error {
 	}
 	if l.Start != nil {
 		if err := l.Start(ctx, service); err != nil {
-			log.Warnf("could not start %s here (%v) — handing the lease back so another member can", service, err)
-			_ = l.Control.ReleaseLease(ctx, l.PIN, service)
+			reason := oneLine(err)
+			// Once per distinct reason, not once per tick — and the same
+			// sentence goes to the control plane, so the machine that cannot
+			// run this service says so somewhere every other member can read.
+			if l.noteStartFailure(service, fingerprint, reason) {
+				log.Warnf("could not start %s here (%s) — handing the lease back so another member can", service, reason)
+				l.changed(service, "cannot start here — "+reason)
+			}
+			l.reportStartFailure(ctx, service, reason)
 			return err
 		}
 	}
+	l.forgetStartFailure(service)
 	l.mu.Lock()
 	if l.held == nil {
 		l.held = map[string]bool{}

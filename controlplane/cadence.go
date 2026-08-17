@@ -120,13 +120,16 @@ const (
 	// Session-state write bounds (abuse-surface ticket 19). Enforced in the
 	// *Tx functions both doors call — PUT handlers and MemberSync — so a bound
 	// never allocates per field and never lives only on the quieter door.
-	EndpointURLMax   = 512
-	MaxBranchesAhead = 32
-	MaxBranchNameLen = 255
-	MemberNameMax    = 64 // invite name; same as KnockNameMax
-	MemberMachineMax = 64
-	RoleActivityMax  = 200
-	RoleModelMax     = 200
+	EndpointURLMax = 512
+	// StartFailReasonMax bounds a placement failure's reason. A failed clone's
+	// stderr is the usual input, and it is a paragraph.
+	StartFailReasonMax = 400
+	MaxBranchesAhead   = 32
+	MaxBranchNameLen   = 255
+	MemberNameMax      = 64 // invite name; same as KnockNameMax
+	MemberMachineMax   = 64
+	RoleActivityMax    = 200
+	RoleModelMax       = 200
 
 	// Create metering (abuse-surface ticket 11). Sized for a venue, not an
 	// attacker: ten teammates arriving, a laptop rebooting and a re-host after

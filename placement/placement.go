@@ -189,6 +189,50 @@ func ShouldClaim(sess controlplane.Session, service, memberID string, now time.T
 	return ok && best.ID == memberID
 }
 
+// StateFingerprint is everything about a session that could change the answer
+// to "can this member start this service?" — the generation, every published
+// endpoint, who holds which lease, and who is in the roster.
+//
+// It exists because of what a failed start must NOT do: retry on a clock.
+// Session 2lmymb's laptop took the conductor lease, failed to open its replica,
+// handed the lease back and did it again five seconds later, 170 times, each
+// attempt failing for exactly the same reason against exactly the same session.
+// A member that has failed remembers the fingerprint it failed against and
+// waits for the *state* to move — a new git endpoint, a lease changing hands, a
+// member arriving or leaving, main advancing — rather than for time to pass. No backoff, no
+// counter, no timer: the retry is keyed on the thing that produced the failure.
+func StateFingerprint(sess controlplane.Session) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "gen=%d;", sess.Generation)
+	kinds := make([]string, 0, len(sess.Endpoints))
+	for k := range sess.Endpoints {
+		kinds = append(kinds, k)
+	}
+	sort.Strings(kinds)
+	for _, k := range kinds {
+		fmt.Fprintf(&b, "ep:%s=%s;", k, sess.Endpoints[k].URL)
+	}
+	for _, svc := range controlplane.Services {
+		fmt.Fprintf(&b, "lease:%s=%s;", svc, sess.Leases[svc].Owner)
+	}
+	// Main moving is the one non-addressing change that can make a start
+	// possible: "this project declares no dev command" stops being true the
+	// moment the scaffold lands. It advances on real work, never on a tick.
+	if sess.Convergence != nil {
+		fmt.Fprintf(&b, "main=%s;", sess.Convergence.MainSHA)
+	}
+	// Members by id and state, sorted — the roster, not the heartbeat. Anything
+	// that ticks (last seen, mirror height, expiry) is deliberately absent: a
+	// fingerprint that changes on its own is a timer wearing a disguise.
+	roster := make([]string, 0, len(sess.Members))
+	for _, m := range sess.Members {
+		roster = append(roster, m.ID+":"+m.State)
+	}
+	sort.Strings(roster)
+	b.WriteString("members=" + strings.Join(roster, ","))
+	return b.String()
+}
+
 // Describe renders one service's placement for the monitor and for log lines —
 // "where is everything right now?" needs a one-glance answer once services can
 // move on their own.
@@ -204,6 +248,12 @@ func Describe(sess controlplane.Session, service string, now time.Time) string {
 			where = " (" + l.Machine + ")"
 		}
 		return fmt.Sprintf("%s%s  %ds left", owner, where, int(time.Until(l.ExpiresAt).Seconds()))
+	}
+	// Why it is not placed beats who might take it next: a service nobody could
+	// START is the case that used to render as a cheerful "unheld — ada next"
+	// forever while ada failed every five seconds.
+	if ok && l.StartFailure != nil {
+		return l.StartFailure.Line(service)
 	}
 	r := Rank(sess, service)
 	if best, ok := r.Best(); ok {

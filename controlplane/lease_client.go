@@ -92,6 +92,24 @@ func (c *Client) ReleaseLease(ctx context.Context, pin, service string) error {
 	return err
 }
 
+// ReportStartFailure hands a lease back AND says why, in one request: this
+// member claimed the service, could not start it, and the next member should
+// try instead. The reason becomes a durable fact on the session (Lease
+// .StartFailure), which is what session 2lmymb had nowhere to put — 170 silent
+// claim/release pairs in eleven minutes.
+//
+// It replaces the bare ReleaseLease on that path rather than joining it: two
+// requests would leave a window where the lease is free and nothing says why,
+// and the steady-state request budget has no room for a second one.
+func (c *Client) ReportStartFailure(ctx context.Context, pin string, req LeaseRequest) error {
+	_, err := c.leaseCall(ctx, http.MethodPost,
+		"/v1/sessions/"+pin+"/leases/"+req.Service+"/start-failed", req)
+	if err == nil {
+		c.setCachedLease(pin, req.Service, nil)
+	}
+	return err
+}
+
 // Leases reads the current placement from the session snapshot.
 func (c *Client) Leases(ctx context.Context, pin string) (map[string]Lease, error) {
 	sess, err := c.Session(ctx, pin)

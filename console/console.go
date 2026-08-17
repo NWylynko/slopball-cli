@@ -524,6 +524,13 @@ func (m *Model) dashboard() string {
 			b.WriteString(line + "\n")
 		}
 
+		// A service nobody could START says so here, named. The session this
+		// exists for showed "conductor off" for eleven minutes while one laptop
+		// failed every five seconds and only its own stdout knew why.
+		for _, line := range m.startFailureLines() {
+			b.WriteString("  " + styleWarn.Render("! "+line) + "\n")
+		}
+
 		if m.behind > 0 {
 			fmt.Fprintf(&b, "  main      %d commit(s) behind main — run sync to take them\n", m.behind)
 		} else {
@@ -548,6 +555,18 @@ func (m *Model) dashboard() string {
 		b.WriteString("  " + m.roleLine(role) + "\n")
 	}
 	return b.String()
+}
+
+// startFailureLines is one line per service a member took and could not start,
+// in the session's own service order.
+func (m *Model) startFailureLines() []string {
+	var out []string
+	for _, svc := range controlplane.Services {
+		if f := m.sess.Leases[svc].StartFailure; f != nil {
+			out = append(out, f.Line(svc))
+		}
+	}
+	return out
 }
 
 // roleLine is one role's dot, its activity, and how long it has been at it.
@@ -753,6 +772,13 @@ func describe(e controlplane.Event) string {
 		return line
 	case "role.idle":
 		return payloadString(e, "role") + " idle"
+	case controlplane.EventPlacementFailed:
+		who := payloadString(e, "member")
+		if machine := payloadString(e, "machine"); machine != "" {
+			who += "@" + machine
+		}
+		return styleWarn.Render(fmt.Sprintf("%s: %s can't start it — %s",
+			payloadString(e, "service"), who, payloadString(e, "reason")))
 	default:
 		return e.Kind
 	}
