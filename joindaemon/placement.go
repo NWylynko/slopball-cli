@@ -302,13 +302,19 @@ func (j *Joined) startConductor(ctx context.Context) error {
 	j.mu.Unlock()
 
 	if host == nil {
+		// The reason this returns rides the lease back to the control plane
+		// (placement.take → ReportStartFailure) and is rendered verbatim by the
+		// console, `slopball monitor` and placement.Describe — so it is the same
+		// sentence `slopball conductor` prints in a terminal, built around the
+		// address the session publishes rather than the forwarder git dialled.
+		published := j.publishedGitEndpoint(ctx)
 		url, _, err := j.Control.GitURL(ctx, j.Session.PIN)
 		if err != nil {
-			return fmt.Errorf("no canonical to conduct: %w", err)
+			return canonical.ExplainRemoteOpenFailure(j.Session.PIN, published, err)
 		}
 		host, err = canonical.OpenRemote(ctx, filepath.Join(j.Paths.Root, "replica"), j.Session.PIN, url)
 		if err != nil {
-			return err
+			return canonical.ExplainRemoteOpenFailure(j.Session.PIN, published, err)
 		}
 	}
 	// The session's own composition decides the agents, not this machine's
@@ -328,6 +334,18 @@ func (j *Joined) startConductor(ctx context.Context) error {
 	j.mu.Unlock()
 	j.log.Infof("conducting %s from this machine — %s", j.Session.PIN, built.Summary())
 	return nil
+}
+
+// publishedGitEndpoint is the session's git address as the session carries it,
+// "" when the control plane cannot be asked. Only messages use it: what a
+// member dials is always the Dialable form.
+func (j *Joined) publishedGitEndpoint(ctx context.Context) string {
+	sess, err := j.Control.Session(ctx, j.Session.PIN)
+	if err != nil {
+		return ""
+	}
+	// raw endpoint ok: named for a human, never dialled.
+	return sess.Endpoints[controlplane.EndpointGit].URL
 }
 
 // fleetLoop ticks the conductor fleet, on its own goroutine and its own

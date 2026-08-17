@@ -61,7 +61,28 @@ func LastPath(pin, service string) string {
 
 func recordPath(pin, service, how, addr string) {
 	lastPath.Store(routeKey(pin, service), how+" "+addr)
+	lastForwardErr.Delete(routeKey(pin, service))
 	logx.New("sessionnet").Infof("%s: %s connected via %s %s", pin, service, how, addr)
+}
+
+var lastForwardErr sync.Map // "pin/service" → error
+
+// LastForwardError reports why this process's loopback forwarder for a session
+// service last failed to reach a holder, nil if its last attempt worked.
+//
+// It exists because that reason reaches nobody otherwise. A forwarder that
+// cannot dial has already accepted the local connection, so all it can do is
+// close it — and the tool on the other end reports the close, not the cause:
+// `no live git holder — nobody is serving it right now` arrives at git as
+// `fatal: unable to access '<loopback>': Recv failure: Connection reset by
+// peer`. Read by canonical.ExplainRemoteOpenFailure, which turns it into the
+// sentence a human acts on.
+func LastForwardError(pin, service string) error {
+	v, ok := lastForwardErr.Load(routeKey(pin, service))
+	if !ok {
+		return nil
+	}
+	return v.(error)
 }
 
 // Dial opens an authenticated, encrypted connection to whoever currently holds
@@ -324,6 +345,9 @@ func (f *Forwarder) acceptOn(ctx context.Context, ln net.Listener) {
 			defer local.Close()
 			remote, err := d.Dial(ctx, f.cfg.Service)
 			if err != nil {
+				// Kept, not just logged: the caller whose git command is about
+				// to fail on a closed connection has no other way to learn why.
+				lastForwardErr.Store(routeKey(f.cfg.PIN, f.cfg.Service), err)
 				logx.New("sessionnet").Warnf("%s: %s forwarder: %v", f.cfg.PIN, f.cfg.Service, err)
 				return
 			}

@@ -371,7 +371,10 @@ func standUpOnBox(ctx context.Context, cmd *cobra.Command, plan firstrun.Plan, o
 		if once {
 			return nil
 		}
-		return conductorLoop(ctx, cmd, pin, gitURL)
+		// The PUBLISHED address, not the forwarder `gitURL` resolved to: the
+		// conductor dials it itself, and everything it says about the session's
+		// git has to name an address that outlives this process.
+		return conductorLoop(ctx, cmd, pin, b.GitURL)
 	}
 	if once {
 		// --once is scripting: no console, no interception, today's output.

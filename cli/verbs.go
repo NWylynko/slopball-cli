@@ -665,21 +665,27 @@ func runConductor(cmd *cobra.Command, _ []string) error {
 
 	var host *canonical.Host
 	if remote != "" && !localCanonical {
+		// `published` is the address the session carries and the only one a human
+		// has ever seen; `remote` becomes the loopback forwarder git dials. Every
+		// word printed from here on names the first (firstrun does the same): a
+		// forwarder port belongs to this process and stays true for as long as it
+		// runs, which is not long enough to put in front of anybody.
+		published := remote
 		// --remote may be the printed session address (slop://…); git cannot dial
 		// that. Dialable is the one place that knows — same as firstrun / join.
 		client := controlClient(cmd)
 		if sess, serr := client.Session(ctx, s.PIN); serr != nil {
-			return fmt.Errorf("resolve session %s for remote %s: %w", s.PIN, remote, serr)
-		} else if dialed, derr := client.Dialable(ctx, sess, remote); derr != nil {
-			return fmt.Errorf("reach remote canonical %s: %w", remote, derr)
+			return fmt.Errorf("resolve session %s for remote %s: %w", s.PIN, published, serr)
+		} else if dialed, derr := client.Dialable(ctx, sess, published); derr != nil {
+			return canonical.ExplainRemoteOpenFailure(s.PIN, published, derr)
 		} else {
 			remote = dialed
 		}
 		host, err = canonical.OpenRemote(ctx, filepath.Join(p.Root, "replica"), s.PIN, remote)
 		if err != nil {
-			return fmt.Errorf("open remote canonical %s: %w", remote, err)
+			return canonical.ExplainRemoteOpenFailure(s.PIN, published, err)
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "conductor driving remote canonical: %s\n", remote)
+		fmt.Fprintf(cmd.OutOrStdout(), "conductor driving remote canonical: %s\n", published)
 	} else {
 		host, err = canonical.Open(p.Canonical, s.PIN)
 		if err != nil {
@@ -797,7 +803,6 @@ func conductorLoop(ctx context.Context, cmd *cobra.Command, pin, remote string) 
 	return runConductor(conductorCmd, nil)
 }
 
-// resolveCanonicalRemote asks the control plane where the host's git server lives.
 // checkSeedFlags settles what a session is seeded from before anything is
 // started. Two seeds is a user error rather than something to merge, and a
 // directory that cannot become a commit should say so while the only cost of
@@ -843,12 +848,26 @@ func ResolveSeedURL(ctx context.Context, pin, target, container string) string {
 	return ep.URL
 }
 
+// resolveCanonicalRemote asks the control plane where the session's git lives,
+// AS PUBLISHED — on the session network that is `slop://<pin>/git/canonical.git`.
+// The caller runs it through Dialable to get something git can clone, and keeps
+// this form for everything it prints: a loopback forwarder port is an address
+// that belongs to the running process, so it is no use in a message and worse
+// than none in an error (session 2lmymb printed two of them and named neither
+// the session's git nor a thing to do about it).
 func resolveCanonicalRemote(ctx context.Context, pin string) string {
-	url, _, err := controlClient(nil).GitURL(ctx, pin)
+	s, err := controlClient(nil).Session(ctx, pin)
 	if err != nil {
 		return ""
 	}
-	return url
+	// raw endpoint ok: this IS the published address, and the caller dials it
+	// through Dialable — resolving here would throw away the only form a human
+	// recognises.
+	ep, ok := s.Endpoints[controlplane.EndpointGit]
+	if !ok {
+		return ""
+	}
+	return ep.URL
 }
 
 // runDaemon is the long-running join-side worker (§5.8): keep the local main
