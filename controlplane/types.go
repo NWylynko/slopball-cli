@@ -456,6 +456,20 @@ const (
 // says about it.
 const EventPlacementFailed = "placement.failed"
 
+// The managed box's lifecycle on the session feed. All three are
+// server-derived — a member posting "the session's box failed" could declare
+// somebody else's serving box dead — and together they are the story session
+// 2lmymb could not tell: the control plane asked for a box (`restart: true`
+// when it is starting one that WAS running again), the provisioner could not
+// produce it (`reason`, the same words that land in `boxes.error`), or the box
+// itself came up and could not boot (`reason`, reported by the box on its way
+// out via `POST …/box/boot-failed`).
+const (
+	EventBoxRequested  = "box.requested"
+	EventBoxFailed     = "box.failed"
+	EventBoxBootFailed = "box.boot-failed"
+)
+
 // PublishableEvents is every kind a session member may append directly.
 var PublishableEvents = map[string]bool{
 	EventSyncPushed:   true,

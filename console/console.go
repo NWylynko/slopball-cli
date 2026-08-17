@@ -729,9 +729,9 @@ func (m *Model) feed() string {
 func describe(e controlplane.Event) string {
 	switch e.Kind {
 	case "member.joined":
-		return payloadString(e, "name") + " joined"
+		return memberLabel(e) + " joined"
 	case "member.left":
-		return payloadString(e, "name") + " left"
+		return memberLabel(e) + " left"
 	case "member.knock":
 		who := payloadString(e, "name")
 		if mach := payloadString(e, "machine"); mach != "" {
@@ -772,6 +772,44 @@ func describe(e controlplane.Event) string {
 		return line
 	case "role.idle":
 		return payloadString(e, "role") + " idle"
+	case "session.access":
+		return "the session is " + payloadString(e, "access")
+	case "host.cutover":
+		line := "hosting moved"
+		if from := payloadString(e, "from"); from != "" {
+			line += " from " + from
+		}
+		if gen := payloadInt(e, "generation"); gen > 0 {
+			line += fmt.Sprintf(" (generation %d)", gen)
+		}
+		return line
+	case "endpoint.cleared":
+		return payloadString(e, "kind") + " endpoint cleared"
+	case "lease.claimed":
+		return leaseOwnerLabel(e) + " took " + payloadString(e, "service")
+	case "lease.released":
+		if who := payloadString(e, "owner"); who != "" {
+			return who + " released " + payloadString(e, "service")
+		}
+		return payloadString(e, "service") + " released"
+	case "lease.handover":
+		return payloadString(e, "service") + " handed to " + payloadString(e, "to")
+	case controlplane.EventBoxRequested:
+		// The two sentences a box request can be. Which one a human needs is
+		// the whole point: one is a session starting, the other is a session
+		// recovering from the thing that was serving it going away.
+		line := "provisioning the session's box"
+		if b, _ := e.Payload["restart"].(bool); b {
+			line = "starting the session's box again"
+		}
+		if prov := payloadString(e, "provider"); prov != "" {
+			line += " (" + prov + ")"
+		}
+		return line
+	case controlplane.EventBoxFailed:
+		return styleWarn.Render(withReason("the session's box could not start", e))
+	case controlplane.EventBoxBootFailed:
+		return styleWarn.Render(withReason("the session's box could not boot", e))
 	case controlplane.EventPlacementFailed:
 		who := payloadString(e, "member")
 		if machine := payloadString(e, "machine"); machine != "" {
@@ -782,6 +820,41 @@ func describe(e controlplane.Event) string {
 	default:
 		return e.Kind
 	}
+}
+
+// memberLabel names the member an event is about. The name is what a human
+// reads; the id is what a `member.left` written before 2026-08-17 carries, and
+// those rows outlive the deploy that fixed them — a feed line reading " left"
+// with nothing in front of it is the bug this exists to keep fixed.
+func memberLabel(e controlplane.Event) string {
+	if name := payloadString(e, "name"); name != "" {
+		return name
+	}
+	if id := payloadString(e, "id"); id != "" {
+		return id
+	}
+	return "a member"
+}
+
+// leaseOwnerLabel is memberLabel for the lease events, which name the owner
+// under different keys.
+func leaseOwnerLabel(e controlplane.Event) string {
+	if name := payloadString(e, "owner"); name != "" {
+		return name
+	}
+	if id := payloadString(e, "memberId"); id != "" {
+		return id
+	}
+	return "somebody"
+}
+
+// withReason appends the reason a failure carried, when it carried one. A
+// failure with no words is still news.
+func withReason(line string, e controlplane.Event) string {
+	if reason := payloadString(e, "reason"); reason != "" {
+		return line + " — " + reason
+	}
+	return line
 }
 
 func (m *Model) logView() string {
