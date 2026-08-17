@@ -135,6 +135,18 @@ func Open(root, pin string) (*Host, error) {
 // existing replica dir. This is what makes the elected-conductor (plan 21)
 // path real: canonical stays on the box, merge intelligence runs on the
 // elector's laptop under its harness login.
+//
+// remoteURL wins on EVERY open, not only on the clone. It is nearly always a
+// loopback forwarder onto `slop://<pin>/git/canonical.git` — an address that
+// belongs to the calling process, not to the session — so a replica that keeps
+// the origin it was cloned with is fetching from a port that died with the
+// previous join daemon. That is session 2lmymb (2026-08-17): a laptop rejoined,
+// took the conductor lease, failed to open the replica ("Failed to connect to
+// 127.0.0.1 port 59297"), handed the lease straight back, and did it again
+// every five seconds for eleven minutes while nothing merged. The same
+// staleness covers a git lease that migrates to another member. See
+// TestOpenRemoteFollowsAGitEndpointThatMoved and
+// TestARejoinedConductorFollowsTheSessionsGitEndpointNotItsDeadForwarder.
 func OpenRemote(ctx context.Context, root, pin, remoteURL string) (*Host, error) {
 	abs, err := filepath.Abs(root)
 	if err != nil {
@@ -154,16 +166,41 @@ func OpenRemote(ctx context.Context, root, pin, remoteURL string) (*Host, error)
 		if err := sbGit.Run(ctx, "", "clone", "--mirror", remoteURL, h.Bare); err != nil {
 			return nil, fmt.Errorf("mirror canonical from %s: %w", remoteURL, err)
 		}
+	} else if err := pointReplicaOriginAt(ctx, h.Bare, remoteURL); err != nil {
+		return nil, fmt.Errorf("point the canonical mirror at %s: %w", remoteURL, err)
 	}
 	if _, err := os.Stat(h.Work); err != nil {
 		if err := sbGit.Run(ctx, "", "clone", "--branch", "main", remoteURL, h.Work); err != nil {
 			return nil, fmt.Errorf("clone canonical work from %s: %w", remoteURL, err)
 		}
+	} else if err := pointReplicaOriginAt(ctx, h.Work, remoteURL); err != nil {
+		return nil, fmt.Errorf("point the canonical work clone at %s: %w", remoteURL, err)
 	}
 	if err := h.Refresh(ctx); err != nil {
 		return nil, err
 	}
 	return h, nil
+}
+
+// pointReplicaOriginAt makes repo's origin remoteURL, and says so when it moved.
+// No probe and no rollback: unlike syncengine.Repoint — which guards a member's
+// own work tree and would rather keep a reachable origin than follow a bad one —
+// the replica has no work of its own to protect, and the URL it is handed came
+// from the control plane one call ago. Leaving it on the previous address is the
+// bug, so a failed set is a failed open.
+func pointReplicaOriginAt(ctx context.Context, repo, remoteURL string) error {
+	cur, err := sbGit.Output(ctx, repo, "remote", "get-url", "origin")
+	if err != nil {
+		return fmt.Errorf("read origin: %w", err)
+	}
+	if strings.TrimSpace(cur) == remoteURL {
+		return nil
+	}
+	if err := sbGit.Run(ctx, repo, "remote", "set-url", "origin", remoteURL); err != nil {
+		return err
+	}
+	logx.New("canonical").Infof("replica %s follows canonical to %s (was %s)", repo, remoteURL, strings.TrimSpace(cur))
+	return nil
 }
 
 // Refresh pulls the latest refs from the remote canonical into the local mirror
