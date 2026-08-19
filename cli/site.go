@@ -132,14 +132,15 @@ func devFromLabel(from string) string {
 // The probe is the honest test of the thing itself, not a proxy for it: nothing
 // here reasons about which lease this machine holds.
 func devSetupPortAdvice() string {
-	if !runtime.LocalPortListening(runtime.DevPort) {
+	port, _ := runtime.LocalDevPort("")
+	if !runtime.LocalPortListening(port) {
 		return fmt.Sprintf("Port %d is free on this machine, so the dev command's\n"+
 			"default binding works and your branch is on http://localhost:%d.",
-			runtime.DevPort, runtime.DevPort)
+			port, port)
 	}
 	return fmt.Sprintf("Port %d is already taken here — the session's own dev\n"+
 		"server runs on this machine. Start yours on a different port. The rule that the\n"+
 		"dev server binds %d governs the SESSION's dev server, which the network splice\n"+
 		"dials; it does not govern a private run of your own. Do not commit the change.",
-		runtime.DevPort, runtime.DevPort)
+		port, port)
 }

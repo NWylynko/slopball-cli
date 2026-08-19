@@ -838,7 +838,8 @@ func (r *Running) StartDev(ctx context.Context, install, dev []string) error {
 	// On this machine the site is the dev process itself, not a forwarder to
 	// one — 127.0.0.1 rather than localhost because a dev server that bound
 	// only v4 is unreachable on a box where localhost resolves ::1 first.
-	if err := session.PublishDevURL(r.PIN, fmt.Sprintf("http://127.0.0.1:%d", runtime.DevPort)); err != nil {
+	devPort, _ := runtime.LocalDevPort(r.Host.Work)
+	if err := session.PublishDevURL(r.PIN, fmt.Sprintf("http://127.0.0.1:%d", devPort)); err != nil {
 		log.Warnf("could not publish the dev URL for `slopball site`: %v", err)
 	}
 	if r.Runtime != nil {
