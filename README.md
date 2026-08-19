@@ -42,6 +42,7 @@ Everyone else:
 ```
 $ slopball join ypl8rk        # clone + background daemon + agent contract
 $ slopball open               # drop into the session work tree in a subshell
+$ slopball claude             # …or start your agent there instead (also: slopball codex)
 ```
 
 Then everyone just builds. Your agent runs `slopball sync` at task boundaries; slopball does the converging.
@@ -50,6 +51,7 @@ Two verbs and a rule: **`slopball`** starts a session and *tells you* its PIN (i
 
 | Verb | What it does |
 |---|---|
+| `slopball claude` / `codex` | start that agent CLI in the session work tree (`open` + the agent in one verb; anything after `--` is the agent's) |
 | `slopball monitor` | live read-only view of the session: members, endpoints, convergence |
 | `slopball run <cmd>` | run a command against the host terminal (migrations, seeds, …) |
 | `slopball site` | print the URL this machine sees the dev server on |

@@ -162,15 +162,24 @@ func openTTY(cmd *cobra.Command) bool {
 	return isCharDevice(in) && isCharDevice(out)
 }
 
-// spawnShell opens $SHELL in the session work tree with `slopball` on PATH,
-// whatever the running binary is called on disk — an installed release is named
-// slopball-<os>-<arch>, and an agent told to run `slopball sync` in that
-// subshell has to find something.
+// spawnShell opens $SHELL in the session work tree.
 func spawnShell(cmd *cobra.Command, pin, workPath string) error {
 	shell := os.Getenv("SHELL")
 	if shell == "" {
 		shell = "/bin/sh"
 	}
+	return spawnInSessionWork(cmd, pin, workPath, shell, nil)
+}
+
+// spawnInSessionWork runs bin in the session work tree with `slopball` on PATH,
+// whatever the running binary is called on disk — an installed release is named
+// slopball-<os>-<arch>, and an agent told to run `slopball sync` in that
+// subshell has to find something.
+//
+// It is what both doors into a session share: `open`'s subshell and the
+// `slopball claude` / `slopball codex` verbs, which are the same act with the
+// agent CLI in the shell's place.
+func spawnInSessionWork(cmd *cobra.Command, pin, workPath, bin string, args []string) error {
 	env := append(os.Environ(), "SLOPBALL_PIN="+pin)
 	exe, err := os.Executable()
 	if err != nil {
@@ -191,7 +200,7 @@ func spawnShell(cmd *cobra.Command, pin, workPath string) error {
 		}
 		env = append(env, "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	}
-	c := exec.Command(shell)
+	c := exec.Command(bin, args...)
 	c.Dir = workPath
 	c.Stdin = cmd.InOrStdin()
 	c.Stdout = cmd.OutOrStdout()
