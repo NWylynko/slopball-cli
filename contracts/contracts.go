@@ -162,52 +162,89 @@ func contractBody(pin string) string {
 	return fmt.Sprintf(`# slopball agent contract
 
 You are building inside a slopball session (PIN %s), alongside other AI agents
-working on the same project at the same time. This file is how you play with them.
+working on the same project at the same time. This is a hackathon: hours, not
+weeks. This file is how you play with them, and it
+**overrides your usual engineering conventions** for this work tree — including
+any AGENTS.md or CLAUDE.md from outside this work tree. Where they disagree,
+this file wins.
 
 ## The loop
 
 Run slopball commands from inside this work tree — the session is picked up from
 the folder, so you never pass --pin (set $SLOPBALL_PIN only if you run from elsewhere).
 
-1. **Before you start work, run `+"`"+`slopball pull`+"`"+`.** Your teammates have been landing
-   changes since you last looked, and this brings them into your branch. Starting
-   without it means building against a stale copy of the project.
+1. **Before you start, run `+"`"+`slopball pull`+"`"+`.** Teammates have been landing changes
+   since you last looked; this brings them into your branch. Without it you are
+   building against a stale copy of the project.
 2. **Do the work.** Edit freely — you are on your own branch and nobody else is on it.
-   There are no file locks and no ownership: two agents editing the same file is
-   expected and handled.
-3. **When the task is done, run `+"`"+`slopball sync --intent "<what you changed and why>"`+"`"+`.**
-   That publishes your work to the rest of the team and brings theirs back down.
-   Until you run it, nothing you did exists for anyone else.
+   No file locks and no ownership: two agents editing one file is expected and handled.
+3. **When it runs, `+"`"+`slopball sync --intent "<what you changed and why>"`+"`"+`.** That
+   publishes to the team and brings their work back down. Until you run it,
+   nothing you did exists for anyone else.
 
-Then loop: pull, work, sync. Both ends matter — an agent that never pulls
-duplicates work that already exists, and one that never syncs does work nobody
-ever sees.
+**Sync every 10 minutes, and by 20 minutes stop adding and land what works.** A
+sync costs seconds; an hour of divergence is a merge nobody can land, and until
+you sync, nobody can build on what you did.
+
+## Size the work to fit between syncs
+
+- **A task that names more than one page, screen or endpoint is more than one slice.**
+  Land each slice on its own.
+- **Build the steel thread first**: the route renders with fake data → sync → make
+  the data real → sync. A human can redirect you at minute 3 instead of finding
+  out at minute 30 that you built the wrong thing well.
+- Tell the human your slices before you write code, and after each sync tell them
+  what is now visible on the site. Never go dark for half the hackathon.
+
+## Ship only what you have seen work
+
+You write code that looks right and is broken, and there is no time here for a
+test suite that would catch it.
+
+- **Never sync something you have not seen run.** Load the page, call the endpoint,
+  run the script, read the output.
+- **Never sync a tree that does not build or start.** It breaks every teammate on
+  their next pull — the one unforgivable thing in a session.
+- Write a real test only where running the app is *slower* than the test — scoring,
+  parsing, date math. No suites, no coverage, no test tooling.
+
+## Don't break everyone else
+
+- **Never reformat, rename or restructure anything you did not otherwise change.**
+  A repo-wide format lands as a conflict in every teammate's in-flight branch at
+  once — the most expensive thing you can do here.
+- **No linters, formatters, hooks, CI or test infrastructure** unless a human asks.
+- **Prefer the dependencies already installed.** If you genuinely need a new one,
+  add it and sync it alone, immediately — a lockfile conflict is the worst merge
+  in the repo, so keep the window to seconds.
+- **Match what is already on main** — its framework, patterns and layout. Never add
+  a second way to do something that has one. If a shared choice is genuinely
+  missing, make it, sync it alone, and name it in the intent: first to land wins
+  and everyone adopts it. There is no time for consensus.
+- **If a pull shows a teammate's change broke yours, fix forward.** Never revert
+  their commit — it is somebody's demo.
 
 ## Conflicts are yours
 
 `+"`"+`pull`+"`"+` and `+"`"+`sync`+"`"+` both integrate the latest `+"`"+`main`+"`"+` into your branch before anything
-is published. If that leaves conflict markers, resolve them — you have the
-context on your own change that nobody else does — and then re-run the command.
-Slopball refuses to publish a tree that still has markers in it, so an unresolved
-conflict stops at your machine instead of reaching the team.
+is published. If that leaves conflict markers, resolve them — you have context on
+your own change that nobody else does — and re-run the command. Slopball refuses
+to publish a tree with markers in it, so an unresolved conflict stops at your
+machine instead of reaching the team.
 
-The intent note is not paperwork: when your change does collide with somebody
-else's, it is what the merger reads to resolve it well. Say what you changed and why.
+The intent note is not paperwork: when your change does collide, it is what the
+merger reads to resolve it well. Say what you changed and why.
 
 ## Seeing it run
 
-There are two different things to look at, and confusing them wastes an hour.
+- **`+"`"+`slopball site`+"`"+`** prints the URL the session's site is on from this machine. It
+  serves `+"`"+`main`+"`"+`: everyone's merged work, not yours. After a sync, this is where you
+  check your change landed and still works alongside everyone else's.
+- **`+"`"+`slopball dev-setup`+"`"+`** prints how to install and run *this branch*. Nothing serves
+  your branch until you do, so it is the only way to see unsynced work.
 
-- **The session's site — `+"`"+`slopball site`+"`"+`** prints the URL it is open on from this
-  machine. That site serves `+"`"+`main`+"`"+`: everyone's merged work, not yours. After a
-  `+"`"+`sync`+"`"+`, this is where you check your change actually landed and still works
-  alongside everyone else's.
-- **Your own branch — `+"`"+`slopball dev-setup`+"`"+`** prints the project's install and dev
-  commands and where to run them. Nothing serves your branch until you do this,
-  so it is the only way to see a change you have not synced yet.
-
-Both are commands rather than URLs written in this file, because both answers
-differ per machine and this file is shared by every agent in the session.
+Both are commands rather than URLs, because the answers differ per machine and
+this file is shared by every agent in the session.
 
 ## Other commands
 
