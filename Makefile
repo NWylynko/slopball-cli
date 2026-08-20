@@ -50,7 +50,7 @@ export CGO_ENABLED := 0
 # so, because nothing else would notice until an install 404'd.
 HOSTBIN := dist/$(BINARY)-$(shell $(GO) env GOOS)-$(shell $(GO) env GOARCH)
 
-.PHONY: build release test fetch-git fetch-git-all box-image clean
+.PHONY: build release test fetch-git fetch-git-all wire-snapshot next-version next-version-consume box-image clean
 
 build: fetch-git
 	@mkdir -p dist
@@ -89,6 +89,42 @@ release: fetch-git-all
 # run would let somebody mistake for the other thing.
 test:
 	$(GO) build ./... && $(GO) vet ./... && $(GO) test ./...
+
+# --- The wire (plan 48, split here by plan 49 step 4) ---------------------------
+# A guard belongs in the repo where the change it catches is made. The shapes an
+# already-installed slopball can see — the control-plane HTTP types, the
+# session-network framing, the telemetry envelope, the relay ticket — have their
+# SOURCE in this module, so the tripwire that catches them moving lives here, and
+# so does the ledger that classifies the move and the tool that turns it into a
+# release number. The control plane's ROUTE table stayed private with the mux
+# that dispatches it; that repo keeps a routes-only golden of its own.
+
+# The wire-surface snapshot. Regenerate ONLY as part of a deliberate wire change,
+# and file the `.wire-changes/<slug>.md` entry that classifies it in the same
+# commit — see .wire-changes/README.md. `make test` pins the file, so an
+# unclassified drift is red before it is tagged.
+wire-snapshot:
+	@$(GO) run ./cmd/slopwire .
+
+# The release derivation: the next version is DERIVED from the pending
+# `.wire-changes/` entries and the last tag reachable from HEAD, never chosen —
+# any `breaking` is a major, else any `additive` is a minor, else a patch, and an
+# empty ledger is a patch because a release changes more than the wire. It prints
+# the changelog (the entries' sentences, verbatim) and the consume → commit → tag
+# sequence, and it writes nothing.
+#
+# ⚠️ THE TAG IS CUT AFTER VALIDATION, NEVER AS ITS TRIGGER (plan 49). This module
+# is public: the first time anything resolves a tag of it, proxy.golang.org
+# stores that zip permanently and sum.golang.org records its hash in an
+# append-only log. A tag pushed before the private monorepo's `make test` is
+# green on that commit burns the number forever.
+next-version:
+	@$(GO) run ./cmd/slopnextversion .
+
+# The one writing step, and step one of the printed sequence: delete the pending
+# entries and append their sentences to CHANGELOG.md under the derived heading.
+next-version-consume:
+	@$(GO) run ./cmd/slopnextversion -consume .
 
 # --- The box image ------------------------------------------------------------
 # Published as ghcr.io/nwylynko/slopball-box:<version> by .github/workflows/

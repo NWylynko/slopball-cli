@@ -118,6 +118,25 @@ Telemetry is **opt-in per machine** and off until you turn it on (`slopball tele
 - **Not** a way to resolve *human* disagreement. If two teammates are building incompatible plans, slopball will faithfully merge the mechanical conflicts and faithfully surface that you disagree.
 - **Not** your backup. The optional GitHub mirror exists for exactly that reason — turn it on if the code needs to outlive the session.
 
+## Contributing, and why a merge is slow
+
+Issues and PRs are open and wanted — a bug report from somebody who actually ran
+the binary is worth more than anything we could have guessed.
+
+**But this repo is only half of slopball, and it is the half that runs on your
+machine.** The control plane, the relay, the telemetry ingest, the Cloudflare
+deploy and — the part that matters here — **almost every test** live in a private
+services repo. So PR CI proves what a public checkout can prove on its own: that
+it compiles for all four release targets from a clean tree with no credentials,
+and that the guards which do live here still hold. It does **not** prove slopball
+works.
+
+Real validation runs privately, against your PR's commit, before a merge. That
+makes merging a round trip and therefore slow — a known, accepted cost of the
+split rather than a queue nobody is watching. [`AGENTS.md`](./AGENTS.md) has the
+rest of the shape, including the one rule that keeps this repo buildable by
+strangers: **a test here may not import anything outside this module.**
+
 ## License
 
 [PolyForm Shield 1.0.0](./LICENSE.md) — **source-available, not OSI open source.** Use it anywhere, including company hackathons; change it; ship it. The one thing it forbids is building a product that competes with slopball on its code. Contributions are inbound=outbound under the same terms, no CLA.

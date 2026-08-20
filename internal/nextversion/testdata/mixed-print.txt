@@ -1,0 +1,50 @@
+# slopball — next version
+
+DERIVED by `make next-version` from .wire-changes/ and the last tag. Nothing
+here ran: this tool never tags and never pushes, the same way
+`make deploy-checklist` never runs wrangler. Cutting the release is yours.
+
+  last tag       v0.1.0
+  pending        3 entries — 1 breaking, 1 additive, 1 patch
+  next version   v1.0.0
+  why            a `breaking` entry is pending — an already-installed client
+                 stops working, so the major moves.
+
+## The changelog
+
+The entries' own sentences, verbatim. `make next-version-consume` appends
+exactly these bytes to CHANGELOG.md and deletes the entries — there is no
+second write-up, so there is nothing to drift.
+
+```markdown
+## v1.0.0
+
+### Breaking — an already-installed client stops working
+
+- floor v1.4.0 — An old client is refused: the control plane no longer reads overlayAddr from a claim.
+
+### Additive — an already-installed client is unaffected
+
+- An old client keeps working: the control plane accepts a member row that carries no memberRole.
+
+### Patch — nothing an already-installed client can observe changed
+
+- An old client sees no difference: the field it never decoded was renamed.
+```
+
+## The sequence
+
+Consume, then commit, then tag — in that order, so the tag points at a tree
+whose CHANGELOG.md already says what shipped and whose ledger is empty.
+
+```sh
+make next-version-consume
+git add -A && git commit -m "release v1.0.0"
+git tag -a v1.0.0 -m "v1.0.0"
+git push origin main --follow-tags
+```
+
+The number is derived, not decided: it is max(class) over the pending entries,
+and an empty ledger is a patch because a release changes more than the wire. It
+is still a suggestion — tag something else if a release needs a number for a
+reason the wire cannot see, and the next derivation reads whatever tag it finds.

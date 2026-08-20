@@ -1,0 +1,29 @@
+# slopball — next version
+
+DERIVED by `make next-version` from .wire-changes/ and the last tag. Nothing
+here ran: this tool never tags and never pushes, the same way
+`make deploy-checklist` never runs wrangler. Cutting the release is yours.
+
+  last tag       v0.1.0
+  pending        nothing
+  next version   v0.1.1
+  why            the ledger is empty — the wire did not move, and a release
+                 changes more than the wire, so the patch moves.
+
+## The changelog
+
+Nothing is appended to CHANGELOG.md: no entry was pending, so no sentence was
+written by anybody who knew. The tag is the whole record of this release.
+
+## The sequence
+
+```sh
+git add -A && git commit -m "release v0.1.1"
+git tag -a v0.1.1 -m "v0.1.1"
+git push origin main --follow-tags
+```
+
+The number is derived, not decided: it is max(class) over the pending entries,
+and an empty ledger is a patch because a release changes more than the wire. It
+is still a suggestion — tag something else if a release needs a number for a
+reason the wire cannot see, and the next derivation reads whatever tag it finds.

@@ -94,6 +94,14 @@ func NewRootCmd() *cobra.Command {
 		SilenceErrors: true,
 		RunE:          runHost,
 	}
+	// Two versions, because there are two stamps and they can disagree. Version
+	// is this build; controlplane.ClientVersion is what rides X-Slopball-Version
+	// on every request and therefore what a 426 refusal quotes back — and since
+	// plan 49 they come from different places (this module's tag, and the client
+	// module version a services build pins). Printing only the first would leave
+	// "your version is too old" unanswerable from the machine being refused, and
+	// an unstamped wire version reads as 0.0.0-dev, which is below every floor.
+	root.SetVersionTemplate("{{.Name}} version {{.Version}} (wire " + controlplane.ClientVersion + ")\n")
 	addHostFlags(root)
 	// First-run only (plan 29). These live on `root` and deliberately NOT on
 	// `_host`: the wizard is a human entry point, and a booting box container

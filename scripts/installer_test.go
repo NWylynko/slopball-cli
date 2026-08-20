@@ -161,6 +161,42 @@ func TestTheReleaseWorkflowPublishesTheMatrixOnATag(t *testing.T) {
 	}
 }
 
+// TestPublishingWaitsForAHuman (plan 49): the build is fix-forward, the publish
+// is not. A GitHub Release is what install.sh resolves and what
+// slopball.wylynko.dev/version reports to every installed client, and the box
+// image is what a BYO user docker-pulls onto their own machine — once strangers
+// have them, they are out.
+//
+// So both publishing jobs sit in the `release` environment and wait for its
+// required reviewer. This guards the half that lives in the repo, and it is
+// worth guarding precisely because the other half cannot be: naming an
+// environment with no protection rules is NOT an error — GitHub creates it on
+// first use and the job runs straight through. Deleting this line would look
+// like tidying and would silently remove the gate.
+func TestPublishingWaitsForAHuman(t *testing.T) {
+	for _, wf := range []string{"release-cli.yml", "box-image.yml"} {
+		body := readRepoFile(t, ".github/workflows/"+wf)
+		if !strings.Contains(body, "environment: release") {
+			t.Errorf("%s publishes without `environment: release` — a tag would put artifacts in front of "+
+				"strangers with nobody asked. The required reviewer itself is a repository setting "+
+				"(Settings → Environments → release); this line is what routes the job through it.\n%s", wf, body)
+		}
+	}
+	// And in release-cli.yml the gate must sit on a job that does NOT build:
+	// gating the build too would mean the four binaries are not even compiled
+	// until somebody approves, so the approver is asked to bless a build that
+	// has not happened.
+	wf := readRepoFile(t, ".github/workflows/release-cli.yml")
+	env := strings.Index(wf, "environment: release")
+	upload := strings.Index(wf, "actions/upload-artifact")
+	download := strings.Index(wf, "actions/download-artifact")
+	publish := strings.Index(wf, "softprops/action-gh-release")
+	if env < 0 || upload < 0 || download < 0 || publish < 0 || !(upload < env && env < download && download < publish) {
+		t.Fatalf("release-cli.yml must build and upload the matrix BEFORE the gated job downloads and publishes it — "+
+			"otherwise the approver is blessing a build that has not run yet:\n%s", wf)
+	}
+}
+
 // TestTheBoxImageWorkflowFiresOnTheSameTag: the box image and the CLI that
 // pulls it are one release. If they can drift, `pullImage`'s local-image
 // fallback stays load-bearing forever, which is the thing tagging was meant to

@@ -17,7 +17,9 @@ name: release-cli
 # since the split and nothing said so, because no tag had been cut since.
 #
 # The same tag fires box-image.yml, so the CLI and the box image it pulls are
-# one release rather than two things that can drift.
+# one release rather than two things that can drift. Both gate their publishing
+# step on the `release` environment's approval, so one tag produces one prompt
+# per artifact and neither is out before a human said so.
 
 on:
   push:
@@ -127,11 +129,34 @@ jobs:
           done
           # The host-arch one is the only asset this runner can execute, so it is
           # the one that can prove the tag and the control URL actually landed.
+          #
+          # `--version` reports BOTH stamps: the build's own version and the wire
+          # version it presents in X-Slopball-Version. They are separate link
+          # flags, so one can land while the other does not — and a missing wire
+          # stamp is not a cosmetic defect. It presents 0.0.0-dev, which is below
+          # every non-empty floor, so the day a floor first exists that release
+          # is refused by the control plane at its first knock, with the refusal
+          # recorded nowhere the person waiting can see it.
+          #
+          # This is asserted HERE rather than in a test on purpose (plan 49 step
+          # 4): a `go test` binary is unstamped by construction, so the only
+          # build where these can actually be wrong is the released one.
           got="$(./dist/slopball-linux-amd64 --version)"
           echo "linux-amd64 reports: $got"
+          echo "$got" | grep -q "(wire " || {
+            echo "binary does not report its wire version: $got" >&2; exit 1; }
+          # `if`, not `grep && exit` — under `set -e` a grep that correctly finds
+          # nothing would fail the whole `&&` list and kill the step, turning the
+          # good case into a red build.
+          if echo "$got" | grep -q "wire 0.0.0-dev"; then
+            echo "the wire version is unstamped — every request would be below any floor" >&2; exit 1
+          fi
           case "${GITHUB_REF_NAME}" in
-            v*) echo "$got" | grep -q "${GITHUB_REF_NAME}" || {
-                  echo "binary reports $got, not the tag ${GITHUB_REF_NAME}" >&2; exit 1; } ;;
+            v*)
+              echo "$got" | grep -q "version ${GITHUB_REF_NAME}" || {
+                echo "binary reports $got, not the tag ${GITHUB_REF_NAME}" >&2; exit 1; }
+              echo "$got" | grep -q "(wire ${GITHUB_REF_NAME})" || {
+                echo "binary presents a wire version that is not the tag: $got" >&2; exit 1; } ;;
           esac
           ./dist/slopball-linux-amd64 --help >/dev/null
       - name: Upload artifacts
@@ -139,11 +164,35 @@ jobs:
         with:
           name: slopball-cli
           path: dist/slopball-*
+
+  # THE PUBLISH IS A SEPARATE JOB SO A HUMAN CAN STAND IN FRONT OF IT (plan 49).
+  #
+  # The build above is fix-forward: a bad one costs a re-push. The release below
+  # is not — it is the thing `install.sh` resolves and the thing
+  # slopball.wylynko.dev/version reports to every installed client, and once
+  # strangers have pulled it, it is out. So the artifacts are built
+  # unconditionally and PUBLISHED only after the `release` environment's required
+  # reviewer says yes. Fix-forward is for code, not for artifacts strangers
+  # install.
+  #
+  # ⚠️ THE APPROVAL IS A REPOSITORY SETTING, NOT THIS FILE. Naming an environment
+  # that has no protection rules is not an error — GitHub creates it on first use
+  # and the job runs straight through. The required reviewer is configured in
+  # Settings → Environments → release, and it is free on a public repo. If nobody
+  # was ever prompted, that is what to check.
+  publish:
+    needs: release
+    # Tags only. A release per push to main would mint one per commit and make
+    # "latest" meaningless.
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: slopball-cli
+          path: dist
       - name: Publish the GitHub Release
-        # Tags only. A release per push to main would mint one per commit and
-        # make "latest" meaningless, which is what install.sh resolves — and
-        # what slopball.wylynko.dev/version reports to every installed client.
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: dist/slopball-*

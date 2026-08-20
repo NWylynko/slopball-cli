@@ -1,0 +1,366 @@
+# slopball wire surface — GENERATED. Do not edit by hand.
+#
+# Regenerate:  make wire-snapshot
+# Pinned by:   go test ./internal/wiresnapshot/ -run TestWireSurfaceMatchesTheCommittedSnapshot
+# Classify:    .wire-changes/README.md
+#
+# This file exists so that a change to a shape somebody else's already-installed
+# slopball can see cannot land unclassified. Drift here is red, and the failure
+# text says what to write. Field order is declaration order; everything else is
+# sorted. The tripwire is SHAPE-ONLY: a behaviour change that breaks an old
+# client without moving a shape is still yours to classify unprompted.
+#
+# The control plane's ROUTE TABLE is not here. It is service code and lives in
+# the private services repo, which keeps a routes-only golden of its own — a
+# route added or dropped is red over there, in the repo that made the change.
+
+## control-plane HTTP — controlplane (types and vocabulary; routes are the private repo's golden)
+# What every laptop, box and conductor calls, and what the control plane
+# answers. A client older than the deployment decodes these structs. This
+# is the wire with a floor and a refusal; the other three have neither. The
+# constants pinned here are the string vocabulary an old client hardcoded
+# (kinds, roles, states, headers); the numbers are the deployment's own
+# policy and are deliberately not pinned — and neither are the ROUTES,
+# which are service code and are the private repo's golden.
+
+const AccessClosed = "closed"
+const AccessFull = "full"
+const AccessOpen = "open"
+const BoxFailed = "failed"
+const BoxProviderBYO = "byo"
+const BoxProviderCloudflare = "cloudflare"
+const BoxProviderDocker = "docker"
+const BoxProvisioning = "provisioning"
+const BoxReady = "ready"
+const BoxRequested = "requested"
+const BudgetEnv = "SLOPBALL_BUDGET_CEILING"
+const BudgetUnit = "concurrent boxes"
+const DecisionAccept = "accept"
+const DecisionDecline = "decline"
+const EndpointDemo = "demo"
+const EndpointDev = "dev"
+const EndpointGit = "git"
+const EndpointLogs = "logs"
+const EndpointMirror = "mirror"
+const EndpointPublic = "public"
+const EventBoxBootFailed = "box.boot-failed"
+const EventBoxFailed = "box.failed"
+const EventBoxRequested = "box.requested"
+const EventMergeApplied = "merge.applied"
+const EventPlacementFailed = "placement.failed"
+const EventSyncPushed = "sync.pushed"
+const MemberAdmitted = "admitted"
+const MemberHeader = "X-Slopball-Member"
+const MemberLeft = "left"
+const MemberPending = "pending"
+const RoleBox = "box"
+const RoleClient = "client"
+const RoleHost = "host"
+const RoleIdle = "idle"
+const RoleWorking = "working"
+const ServiceConductor = "conductor"
+const ServiceDev = "dev"
+const ServiceGit = "git"
+const StatusDegraded = "degraded"
+const StatusEnded = "ended"
+const StatusLive = "live"
+const VersionHeader = "X-Slopball-Version"
+type AccessPut struct
+	Access string `json:"access"`
+type BoxBootFailure struct
+	Reason string `json:"reason"`
+type BoxFacts struct
+	Target string `json:"target,omitempty"`
+	Container string `json:"container,omitempty"`
+	Image string `json:"image,omitempty"`
+	Version string `json:"version,omitempty"`
+	State string `json:"state,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	GitURL string `json:"gitUrl,omitempty"`
+	DevURL string `json:"devUrl,omitempty"`
+	LogsURL string `json:"logsUrl,omitempty"`
+	Error string `json:"error,omitempty"`
+	RequestedAt *time.Time `json:"requestedAt,omitempty"`
+	ReadyAt *time.Time `json:"readyAt,omitempty"`
+	UpdatedAt *time.Time `json:"updatedAt,omitempty"`
+type BoxRequest struct
+	PIN string `json:"pin,omitempty"`
+	Brief string `json:"brief,omitempty"`
+	SeedURL string `json:"seedUrl,omitempty"`
+	Image string `json:"image,omitempty"`
+	Replace bool `json:"replace,omitempty"`
+type ClaimRequest struct
+	PIN string `json:"pin"`
+	OverlayAddr string `json:"overlayAddr,omitempty"`
+	HostMachine string `json:"hostMachine,omitempty"`
+	Stack *StackInfo `json:"stack,omitempty"`
+	Harness string `json:"harness,omitempty"`
+	SeedURL string `json:"seedUrl,omitempty"`
+	LocalGeneration int `json:"localGeneration,omitempty"`
+	Takeover bool `json:"takeover,omitempty"`
+	MemberName string `json:"memberName,omitempty"`
+	MemberRole string `json:"memberRole,omitempty"`
+type ClaimResponse struct
+	Session Session `json:"session"`
+	Created bool `json:"created"`
+	Resumed bool `json:"resumed"`
+	JoinOnly bool `json:"joinOnly"`
+	Takeover bool `json:"takeover"`
+	Message string `json:"message,omitempty"`
+	MemberID string `json:"memberId,omitempty"`
+	Secret string `json:"secret,omitempty"`
+	RelayTickets map[string]string `json:"relayTickets,omitempty"`
+type ConductorRecord struct
+	Elector string `json:"elector,omitempty"`
+	Harness string `json:"harness,omitempty"`
+	Model string `json:"model,omitempty"`
+	RunnerID string `json:"runnerId,omitempty"`
+	Roles map[string]RoleAgent `json:"roles,omitempty"`
+	Active bool `json:"active"`
+	ElectedAt *time.Time `json:"electedAt,omitempty"`
+type Convergence struct
+	MainSHA string `json:"mainSha,omitempty"`
+	BranchesAhead []string `json:"branchesAhead,omitempty"`
+	BranchesAheadOmitted int `json:"branchesAheadOmitted,omitempty"`
+	LastMergeAt *time.Time `json:"lastMergeAt,omitempty"`
+	LastMergeBranch string `json:"lastMergeBranch,omitempty"`
+	Watcher string `json:"watcher,omitempty"`
+	LastError *string `json:"lastError"`
+	UpdatedAt *time.Time `json:"updatedAt,omitempty"`
+type CutoverRequest struct
+	NewGitURL string `json:"newGitUrl"`
+	From string `json:"from,omitempty"`
+	Drain bool `json:"drain,omitempty"`
+	Generation int `json:"generation"`
+	LogsURL string `json:"logsUrl,omitempty"`
+	HostMachine string `json:"hostMachine,omitempty"`
+type Endpoint struct
+	URL string `json:"url"`
+	Host string `json:"host,omitempty"`
+	Port int `json:"port,omitempty"`
+	Source string `json:"source,omitempty"`
+	UpdatedAt *time.Time `json:"updatedAt,omitempty"`
+	Direct string `json:"direct,omitempty"`
+type EndpointPut struct
+	URL string `json:"url"`
+	Host string `json:"host,omitempty"`
+	Port int `json:"port,omitempty"`
+	Source string `json:"source,omitempty"`
+	Direct string `json:"direct,omitempty"`
+	Generation int `json:"generation"`
+type Event struct
+	Seq int64 `json:"seq"`
+	Kind string `json:"kind"`
+	Payload map[string]any `json:"payload,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+type EventPost struct
+	Kind string `json:"kind"`
+	Payload map[string]any `json:"payload,omitempty"`
+type GenerationConflict struct
+	Error string `json:"error"`
+	CurrentGeneration int `json:"currentGeneration"`
+	DemoteToClient bool `json:"demoteToClient"`
+type Health struct
+	OK bool `json:"ok"`
+	Version string `json:"version,omitempty"`
+	DB string `json:"db"`
+type Lease struct
+	Service string `json:"service"`
+	Owner string `json:"owner,omitempty"`
+	OwnerName string `json:"ownerName,omitempty"`
+	Machine string `json:"machine,omitempty"`
+	Generation int `json:"generation"`
+	ExpiresAt time.Time `json:"expiresAt"`
+	UpdatedAt time.Time `json:"updatedAt,omitempty"`
+	StartFailure *StartFailure `json:"startFailure,omitempty"`
+type LeaseRequest struct
+	Service string `json:"service"`
+	MemberID string `json:"memberId"`
+	Name string `json:"name,omitempty"`
+	Machine string `json:"machine,omitempty"`
+	TTLSeconds int `json:"ttlSeconds,omitempty"`
+	To string `json:"to,omitempty"`
+	StartFailReason string `json:"startFailReason,omitempty"`
+	Force bool `json:"force,omitempty"`
+type Member struct
+	ID string `json:"id"`
+	Name string `json:"name"`
+	Role string `json:"role"`
+	Branch string `json:"branch,omitempty"`
+	Machine string `json:"machine,omitempty"`
+	HeadSHA string `json:"headSha,omitempty"`
+	MainMirrorSHA string `json:"mainMirrorSha,omitempty"`
+	MainMirrorHeight int `json:"mainMirrorHeight,omitempty"`
+	Harness string `json:"harness,omitempty"`
+	Online bool `json:"online"`
+	LastSeenAt time.Time `json:"lastSeenAt"`
+	JoinedAt time.Time `json:"joinedAt,omitempty"`
+	Capability *MemberCapability `json:"capability,omitempty"`
+	State string `json:"state,omitempty"`
+	Version string `json:"version,omitempty"`
+	Secret string `json:"secret,omitempty"`
+type MemberCapability struct
+	Runtime string `json:"runtime,omitempty"`
+	Version string `json:"version,omitempty"`
+	PkgMgr string `json:"pkgMgr,omitempty"`
+	Score int `json:"score,omitempty"`
+type MemberDecision struct
+	Decision string `json:"decision"`
+type MemberJoinRequest struct
+	Name string `json:"name"`
+	Role string `json:"role"`
+	Branch string `json:"branch,omitempty"`
+	Machine string `json:"machine,omitempty"`
+	Harness string `json:"harness,omitempty"`
+	Capability *MemberCapability `json:"capability,omitempty"`
+type MemberSync struct
+	Update MemberUpdate `json:"update"`
+	Generation int `json:"generation"`
+	Hold []string `json:"hold,omitempty"`
+	Endpoints map[string]EndpointPut `json:"endpoints,omitempty"`
+	Convergence *Convergence `json:"convergence,omitempty"`
+	Conductor *ConductorRecord `json:"conductor,omitempty"`
+	WantSnapshot bool `json:"wantSnapshot,omitempty"`
+type MemberSyncResult struct
+	Generation int `json:"generation"`
+	Conflict bool `json:"conflict,omitempty"`
+	Lost []string `json:"lost,omitempty"`
+	Session *Session `json:"session,omitempty"`
+	RelayTickets map[string]string `json:"relayTickets,omitempty"`
+	Refused []string `json:"refused,omitempty"`
+type MemberUpdate struct
+	Branch string `json:"branch,omitempty"`
+	HeadSHA string `json:"headSha,omitempty"`
+	MainMirrorSHA string `json:"mainMirrorSha,omitempty"`
+	MainMirrorHeight int `json:"mainMirrorHeight,omitempty"`
+	Harness string `json:"harness,omitempty"`
+	Capability *MemberCapability `json:"capability,omitempty"`
+	Role string `json:"role,omitempty"`
+type RedeemPending struct
+	MemberID string `json:"memberId"`
+	RequestID string `json:"requestId"`
+	Acceptors []string `json:"acceptors,omitempty"`
+type RedeemRequest struct
+	Name string `json:"name"`
+	Machine string `json:"machine,omitempty"`
+	RequestID string `json:"requestId"`
+type RedeemResult struct
+	Decision string `json:"decision"`
+	MemberID string `json:"memberId,omitempty"`
+	Secret string `json:"secret,omitempty"`
+	Message string `json:"message,omitempty"`
+	Session Session `json:"session,omitempty"`
+	RequestID string `json:"requestId,omitempty"`
+	RelayTickets map[string]string `json:"relayTickets,omitempty"`
+type RoleAgent struct
+	Harness string `json:"harness,omitempty"`
+	Model string `json:"model,omitempty"`
+	Mechanical bool `json:"mechanical,omitempty"`
+	State string `json:"state,omitempty"`
+	Activity string `json:"activity,omitempty"`
+	Since time.Time `json:"since,omitzero"`
+	UpdatedAt time.Time `json:"updatedAt,omitzero"`
+type Session struct
+	PIN string `json:"pin"`
+	UID string `json:"uid,omitempty"`
+	Generation int `json:"generation"`
+	Status string `json:"status"`
+	OverlayAddr string `json:"overlayAddr,omitempty"`
+	HostMachine string `json:"hostMachine,omitempty"`
+	Endpoints map[string]Endpoint `json:"endpoints"`
+	Members []Member `json:"members"`
+	Conductor *ConductorRecord `json:"conductor,omitempty"`
+	Convergence *Convergence `json:"convergence,omitempty"`
+	Box *BoxFacts `json:"box,omitempty"`
+	Leases map[string]Lease `json:"leases,omitempty"`
+	Stack *StackInfo `json:"stack,omitempty"`
+	Harness string `json:"harness,omitempty"`
+	SeedURL string `json:"seedUrl,omitempty"`
+	SessionKey string `json:"sessionKey,omitempty"`
+	RelayAddr string `json:"relayAddr,omitempty"`
+	TelemetryURL string `json:"telemetryUrl,omitempty"`
+	Access string `json:"access,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+	ExpiresAt time.Time `json:"expiresAt"`
+type StackInfo struct
+	Runtime string `json:"runtime,omitempty"`
+	Version string `json:"version,omitempty"`
+	PkgMgr string `json:"pkgMgr,omitempty"`
+type StartFailure struct
+	MemberID string `json:"memberId,omitempty"`
+	Name string `json:"name,omitempty"`
+	Machine string `json:"machine,omitempty"`
+	Reason string `json:"reason"`
+	At time.Time `json:"at,omitzero"`
+
+## session network framing — sessionnet
+# Two clients, spliced through a relay that carries ciphertext only. No
+# version check exists here and none can: the relay never reads the
+# control floor, so a framing change is not refused, it is GARBLED —
+# unsurvivable and mute, mid-clone. The record layer's own struct is
+# pinned because the length-prefix width and the nonce counters live in
+# its fields.
+
+const HealthPath = "/healthz"
+const KeyLen = 32
+const Proto = "slopball-relay/1"
+const RelayPath = "/relay/v1"
+const Scheme = "slop"
+const handshakeInfo = "slopball-sessionnet-v1"
+const handshakeWindow = 20 * time.Second
+const maxRecord = 16 * 1024
+type Key [KeyLen]byte
+type secureConn struct
+	net.Conn
+	sealer interface{Seal(dst, nonce, plaintext, additionalData []byte) []byte}
+	opener interface{Open(dst, nonce, ciphertext, additionalData []byte) ([]byte, error)}
+	sendCtr uint64
+	recvCtr uint64
+	buf []byte
+	hdr [2]byte
+
+## telemetry envelope — telemetry
+# The shape a client, relay or control plane POSTs to the ingest (a JSON
+# array of these). The ingest drops what it cannot read without ceremony
+# and nothing rides back to the client, so a shape change is silent data
+# loss rather than an error anybody sees.
+
+type Envelope struct
+	TS time.Time `json:"ts"`
+	Name string `json:"name"`
+	Service string `json:"service"`
+	Version string `json:"version,omitempty"`
+	Source string `json:"source,omitempty"`
+	PIN string `json:"pin,omitempty"`
+	SessionUID string `json:"sessionUid,omitempty"`
+	Member string `json:"member,omitempty"`
+	TraceID string `json:"traceId,omitempty"`
+	Level string `json:"level,omitempty"`
+	Component string `json:"component,omitempty"`
+	Method string `json:"method,omitempty"`
+	PathTemplate string `json:"pathTemplate,omitempty"`
+	Status int `json:"status,omitempty"`
+	DurationMS int64 `json:"durationMs,omitempty"`
+	Bytes int64 `json:"bytes,omitempty"`
+	Truncated bool `json:"truncated,omitempty"`
+	Headers string `json:"headers,omitempty"`
+	Body string `json:"body,omitempty"`
+	Data map[string]any `json:"data,omitempty"`
+	Dropped int64 `json:"dropped,omitempty"`
+
+## relay ticket claims — relayticket
+# Minted by the control worker, verified offline by the session worker,
+# cached client-side for up to TicketTTL. Three parties hold a ticket at
+# once, so a format change garbles all three. FIELD ORDER IS THE WIRE:
+# the payload is the fields NUL-separated in declaration order, followed
+# by an 8-byte big-endian expiry.
+
+const TicketTTL = time.Hour
+type Claims struct
+	PIN string
+	Service string
+	MemberID string
+	SessionUID string
+	Expiry time.Time
+

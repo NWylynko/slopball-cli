@@ -66,9 +66,21 @@ jobs:
       - name: Build, vet and run the public guards
         run: make test
 
+  # Gated on the `release` environment's approval, exactly like the CLI release
+  # (plan 49). The image is what `box add <ssh-target>` docker-pulls onto a user's
+  # own machine and what the managed box runs; once it is on ghcr under a tag,
+  # somebody can pull it. `check` above is a build and a vet — the real suite is
+  # the private repo's, run before the tag is cut — so the approval is also where
+  # "was the monorepo green on this commit?" gets answered by the one person who
+  # can answer it.
+  #
+  # ⚠️ Naming an environment with no protection rules is not an error: GitHub
+  # creates it on first use and the job runs straight through. The required
+  # reviewer lives in Settings → Environments → release.
   publish:
     needs: check
     runs-on: ubuntu-latest
+    environment: release
     steps:
       - uses: actions/checkout@v4
 

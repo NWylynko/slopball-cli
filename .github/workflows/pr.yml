@@ -1,0 +1,66 @@
+name: pr
+
+# BUILD-MATRIX-ONLY CI, and that is the honest whole of what this repo can prove
+# about a change (plan 49).
+#
+# The product suite is private: it needs a control plane, postgres, the relay and
+# telemetry images, and the ~100 test files that stayed in the services repo by
+# design. So a PR here gets "does it compile for every platform we ship, and do
+# the guards that live here still hold" — and real validation happens in the
+# private monorepo before a merge, which makes merging a contributor's PR a round
+# trip. That lag is documented in README.md and AGENTS.md so nobody has to infer
+# it from silence.
+#
+# ⚠️ NO CREDENTIALS, DELIBERATELY. This job takes no repository variable and no
+# secret — not even SLOPBALL_DEFAULT_CONTROL, which release-cli.yml requires. The
+# property under test is plan 49's first acceptance line: the public repo builds
+# the full release matrix from a clean checkout with no access to anything
+# private. A build that quietly needed a variable would pass here and fail for
+# the first stranger who forked it.
+
+on:
+  pull_request:
+  # Pushes to a branch that is not main and has no PR yet — the same proof, one
+  # commit earlier. main and tags are release-cli.yml's.
+  push:
+    branches-ignore: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # Every arch, not just the host's: `//go:embed` fails the build outright
+      # when the archive for the target arch is absent, so a host-only fetch
+      # would pass the compile and fail the matrix.
+      - name: Fetch bundled git (all arches)
+        run: make fetch-git-all
+
+      - name: Build, vet and run the public guards
+        run: make test
+
+      - name: Cross-compile the full release matrix
+        # No CONTROL_URL: an unstamped build keeps its loopback default, which is
+        # the property ADR 0006 decision 5 protects. Stamping is the release
+        # path's job and needs a variable this job deliberately does not read.
+        run: make release
+
+      - name: Check the matrix is complete
+        run: |
+          set -eu
+          for p in darwin-arm64 darwin-amd64 linux-arm64 linux-amd64; do
+            test -s "dist/slopball-$p" || { echo "missing dist/slopball-$p" >&2; exit 1; }
+          done
+          ./dist/slopball-linux-amd64 --version
+          ./dist/slopball-linux-amd64 --help >/dev/null
