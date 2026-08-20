@@ -262,7 +262,7 @@ func NewRootCmd() *cobra.Command {
 	// shipped as `slopball-control` and `slopball-relay` (plan 39): different
 	// audience, different release cadence, linux-only. Keeping them on this
 	// binary is what made every teammate's laptop link a postgres driver.
-	root.AddCommand(hostCmd, join, syncCmd, push, pull, repoint, runCmd, conductorCmd, daemon, elect, take, handOff, services, newMembersCmd(), newAccessCmd(), newTelemetryCmd(), newReportCmd(), mon, newBoxCmd(), newOpenCmd(), newHarnessVerbCmd(harness.Claude), newHarnessVerbCmd(harness.Codex), newSiteCmd(), newDevSetupCmd(), updateCmd)
+	root.AddCommand(hostCmd, join, syncCmd, push, pull, repoint, runCmd, conductorCmd, daemon, elect, take, handOff, services, newMembersCmd(), newAccessCmd(), newTelemetryCmd(), newReportCmd(), mon, newBoxCmd(), newOpenCmd(), newExportCmd(), newHarnessVerbCmd(harness.Claude), newHarnessVerbCmd(harness.Codex), newSiteCmd(), newDevSetupCmd(), updateCmd)
 	return root
 }
 
