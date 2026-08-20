@@ -59,6 +59,13 @@ func resolveOpenPIN(cmd *cobra.Command, args []string) (string, error) {
 	errW := cmd.ErrOrStderr()
 	if len(args) == 1 {
 		pin := args[0]
+		// Check liveness BEFORE the metadata: a session still standing up has a
+		// live marker but has not saved session.json yet, and reporting "no
+		// local session" for one that a process on this machine is actively
+		// building is the lie this whole path exists to stop telling.
+		if err := awaitWorkTree(cmd, pin); err != nil {
+			return "", err
+		}
 		if _, err := session.Load(pin); err != nil {
 			return "", fmt.Errorf("no local session %s — run slopball to host or slopball join %s", pin, pin)
 		}
@@ -77,14 +84,45 @@ func resolveOpenPIN(cmd *cobra.Command, args []string) (string, error) {
 		return "", fmt.Errorf("no live session on this machine — run slopball to host or slopball join <pin>")
 	case 1:
 		pin := entries[0].PIN
+		if err := awaitWorkTree(cmd, pin); err != nil {
+			return "", err
+		}
 		fmt.Fprintf(errW, "opening %s → %s\n", pin, workDir(session.ForPin(pin)))
 		return pin, nil
 	default:
 		if !openTTY(cmd) {
 			return "", fmt.Errorf("%d live sessions — pass slopball open <pin> or run on a terminal", len(entries))
 		}
-		return PickLiveSession(cmd, entries)
+		pin, err := PickLiveSession(cmd, entries)
+		if err != nil {
+			return "", err
+		}
+		// A session still standing up is on the menu — it is live, that is the
+		// point — so picking it has to wait exactly like the other two branches.
+		if err := awaitWorkTree(cmd, pin); err != nil {
+			return "", err
+		}
+		return pin, nil
 	}
+}
+
+// awaitWorkTree holds until pin's work tree is usable, and says so while it
+// waits. A session that is already up costs one file read and no message.
+//
+// This is the whole of TASK-13's answer, and it sits in resolveOpenPIN because
+// that is the single chokepoint every session-entering verb shares — open, cd,
+// workspace, claude and codex — so none of them can grow its own opinion about
+// what a half-built session is.
+//
+// Waiting, not reporting, is the deliberate choice: the alternative told a
+// human to run the same command again in a few seconds, and told an agent —
+// which cannot judge "a few seconds" — that the session did not exist.
+func awaitWorkTree(cmd *cobra.Command, pin string) error {
+	if !session.StandingUp(pin) {
+		return nil
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(), "session %s is still standing up — waiting for its work tree\n", pin)
+	return session.WaitUntilReady(cmd.Context(), pin)
 }
 
 func livePinSet() map[string]bool {

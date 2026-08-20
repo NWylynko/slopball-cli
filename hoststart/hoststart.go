@@ -383,6 +383,16 @@ func Start(ctx context.Context, opt Options) (r *Running, err error) {
 	if err := os.MkdirAll(paths.Root, 0o755); err != nil {
 		return nil, err
 	}
+	// Same rule as the join daemon: a session whose directory exists is
+	// discoverable from that moment, and readiness is a separate fact that
+	// arrives with the work tree. Hosting is the slower of the two standups —
+	// canonical, the git server, the dev tree — so the window this closes is
+	// the wider one.
+	standup, err := session.BeginStandup(pin, session.RoleHost, "")
+	if err != nil {
+		return nil, err
+	}
+	defer standup.Release()
 	if claim.JoinOnly {
 		return nil, &ErrJoinAsClient{Message: claim.Message, Session: claim.Session}
 	}
@@ -555,6 +565,11 @@ func Start(ctx context.Context, opt Options) (r *Running, err error) {
 	if err := meta.Save(); err != nil {
 		_ = host.Close(ctx)
 		return nil, err
+	}
+	// Canonical and the dev tree are on disk; everything below is the control
+	// plane, the dev server and the fleet. Openable from here.
+	if err := standup.Ready(meta); err != nil {
+		log.Warnf("could not mark %s ready: %v", pin, err)
 	}
 	workTree := host.Work
 	if branch != "" {
@@ -747,9 +762,9 @@ func Start(ctx context.Context, opt Options) (r *Running, err error) {
 		}
 	}
 	go r.heartbeat(ctx, logs)
-	if err := session.WriteLive(meta); err != nil {
-		log.Warnf("could not write live marker: %v", err)
-	}
+	// standup.Ready already wrote the marker, back when the work tree became
+	// usable. Writing it again here would reset StartedAt and lose the standup
+	// duration.
 	if opt.BoxBoot {
 		r.startExecHolder(ctx, log)
 	}

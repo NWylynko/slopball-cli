@@ -22,6 +22,15 @@ type LiveMarker struct {
 	// process-lived (sessionnet.LocalURL) — and LiveHere already deletes a
 	// marker whose pid is gone, so a URL cannot outlive its listener here.
 	DevURL string `json:"devUrl,omitempty"`
+	// ReadyAt is when this session's work tree became usable. Zero means the
+	// process is still standing it up — the directory exists, the tree may not.
+	//
+	// It is a separate fact from the marker's existence on purpose: the marker
+	// answers "does a process hold this session" (written first, so nothing
+	// ever reports a session that is on disk as absent) and ReadyAt answers
+	// "can I open it yet". Collapsing them is what produced a `slopball open`
+	// that denied a session you were standing inside. See Standup.
+	ReadyAt time.Time `json:"readyAt,omitempty"`
 }
 
 // LiveEntry is one live session discovered under $SLOPBALL_HOME.
@@ -33,13 +42,18 @@ type LiveEntry struct {
 // Live is the on-disk liveness file for a session.
 func (p Paths) Live() string { return filepath.Join(p.Root, "live.json") }
 
-// WriteLive records that this process is holding the session open.
+// WriteLive records that this process is holding the session open AND that its
+// work tree is ready to use. A standup that wants the first without the second
+// goes through BeginStandup instead — that is the whole of Standup's reason to
+// exist.
 func WriteLive(s Session) error {
+	now := time.Now().UTC()
 	return WriteLiveMarker(s.PIN, LiveMarker{
 		PID:       os.Getpid(),
 		Role:      s.Role,
 		Branch:    BranchLabel(s.Branch),
-		StartedAt: time.Now().UTC(),
+		StartedAt: now,
+		ReadyAt:   now,
 	})
 }
 

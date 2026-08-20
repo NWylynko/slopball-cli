@@ -159,6 +159,21 @@ func Join(ctx context.Context, opt Options) (*Joined, error) {
 		}
 	}
 	log := logx.New("join")
+	// Claim the session directory before the control plane is even dialled.
+	// resolveJoinSession is several round trips on a cold network, and a person
+	// who has just typed `slopball join` is entitled to type `slopball claude`
+	// straight after it — so the claim has to precede the slow part, not follow
+	// it. Everything from here to Ready is covered.
+	//
+	// It doubles as the honest version of noDaemonRunningHere above: until this
+	// existed there was no marker to check during standup at all, so two
+	// concurrent joins for one PIN raced into the same directory instead of the
+	// second being refused.
+	standup, err := session.BeginStandup(opt.PIN, session.RoleClient, "client/"+name)
+	if err != nil {
+		return nil, err
+	}
+	defer standup.Release()
 	client := opt.Control
 	if client == nil {
 		client = controlplane.NewClient(controlplane.BaseURL(""))
@@ -243,6 +258,14 @@ func Join(ctx context.Context, opt Options) (*Joined, error) {
 	if err := meta.Save(); err != nil {
 		return nil, err
 	}
+	// The work tree, the contracts and the metadata are all on disk, so this is
+	// the instant it becomes openable — ahead of JoinMember, the held stream
+	// and the loops below, none of which a person sitting in the folder is
+	// waiting for. Every `slopball open`/`claude` blocked on this session wakes
+	// here.
+	if err := standup.Ready(meta); err != nil {
+		log.Warnf("could not mark %s ready: %v", opt.PIN, err)
+	}
 	_ = syncengine.SaveCursors(paths.Cursors, syncengine.Cursors{
 		Endpoint: gitURL, Generation: sess.Generation,
 	})
@@ -289,9 +312,10 @@ func Join(ctx context.Context, opt Options) (*Joined, error) {
 	}
 	go j.mirrorLoop()
 	go j.fleetLoop()
-	if err := session.WriteLive(meta); err != nil {
-		log.Warnf("could not write live marker: %v", err)
-	}
+	// No live marker written here any more: standup.Ready did it the moment the
+	// work tree was usable, several round trips ago. Rewriting it here would
+	// reset StartedAt and so throw away the one number that says how long this
+	// standup actually took.
 	log.Infof("mirror daemon running for %s (branch %s)", opt.PIN, branch)
 	return j, nil
 }
