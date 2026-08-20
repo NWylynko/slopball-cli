@@ -202,6 +202,13 @@ func Ask(in io.Reader, out io.Writer, base Plan, asked map[string]bool, remember
 	// a prompt, not a fact.
 
 	if !asked[QMirror] {
+		// This question lands in the first thirty seconds, before there is any
+		// work to lose, so on its own "blank = off" reads as the last chance to
+		// keep it — and the mirror stays opt-in (plan 37), so pressure to say
+		// yes here is pressure in the wrong direction. Naming the way out makes
+		// blank an actual default instead of a decision.
+		fmt.Fprintf(out, "\n  blank is safe: `slopball export <path>` copies your workspace out whenever you like,\n"+
+			"  as a plain git repo with no account involved.\n")
 		p.MirrorURL = q.line(fmt.Sprintf("  github snapshot   (blank = off)%s > ", defaultHint(p.MirrorURL)), p.MirrorURL)
 		if p.MirrorURL != "" {
 			if name, tok := MirrorCredential(); tok != "" {
