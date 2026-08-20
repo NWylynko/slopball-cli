@@ -325,3 +325,30 @@ func requireSh(t *testing.T) {
 		t.Skip("no POSIX sh on this machine")
 	}
 }
+
+// TestTheBoxImageStampsTheVersionItPutsOnTheWire: the box runs a slopball
+// binary that knocks at the control plane like any laptop, so it needs the same
+// stamp — and it did not have it.
+//
+// box/Dockerfile.ci compiles cmd/slopball from source and carried only
+// `-X cli.Version`, so every published ghcr image presented
+// controlplane.ClientVersion's package default, `0.0.0-dev`, on every request.
+// ClientMeetsFloor ranks that below every floor, fail-closed: the day a real
+// floor exists, every managed box this deployment provisions is refused at its
+// first knock — and docs/security.md already names the box image as the drain
+// check's blind spot, because `admin versions` only answers for clients that
+// have talked to the control plane and an unbuilt image has talked to nobody.
+//
+// The other two box paths are fine and stay fine for the same reason: they COPY
+// a binary somebody else already stamped (box/Dockerfile takes the shipped one,
+// and the managed container stages a released asset), so this is the only place
+// the box's own link flags are written.
+func TestTheBoxImageStampsTheVersionItPutsOnTheWire(t *testing.T) {
+	df := readRepoFile(t, "box/Dockerfile.ci")
+	const stamp = "-X github.com/nwylynko/slopball-cli/controlplane.ClientVersion=${VERSION}"
+	if !strings.Contains(df, stamp) {
+		t.Fatalf("box/Dockerfile.ci never stamps ClientVersion, so every published box image presents "+
+			"0.0.0-dev on the wire — below every floor, and invisible until a floor exists.\n"+
+			"\twant a link flag containing %s\n%s", stamp, df)
+	}
+}

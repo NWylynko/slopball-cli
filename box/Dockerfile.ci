@@ -41,10 +41,18 @@ ARG VERSION=0.0.0-dev
 # Go's own caches ride cache mounts, so a source change relinks instead of
 # recompiling every dependency (14s → ~2s). They are mounts, not layers, so
 # nothing they hold reaches the image.
+# BOTH stamps, because they are two variables and the box needs both. cli.Version
+# is what `slopball --version` reports; controlplane.ClientVersion is what rides
+# X-Slopball-Version on every request the box makes, and its package default
+# (0.0.0-dev) is below every floor, fail-closed. Only cli.Version was here until
+# 2026-08-20, so every published image knocked as a client too old for any real
+# floor — and the drain check cannot see it, because `admin versions` answers for
+# clients that have TALKED to the control plane and an unbuilt image has talked
+# to nobody. Guarded by scripts.TestTheBoxImageStampsTheVersionItPutsOnTheWire.
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
-    go build -ldflags "-s -w -X github.com/nwylynko/slopball-cli/cli.Version=${VERSION}" \
+    go build -ldflags "-s -w -X github.com/nwylynko/slopball-cli/cli.Version=${VERSION} -X github.com/nwylynko/slopball-cli/controlplane.ClientVersion=${VERSION}" \
     -o /out/slopball ./cmd/slopball
 
 FROM debian:trixie
