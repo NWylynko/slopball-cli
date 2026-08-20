@@ -244,6 +244,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyPending(msg)
 	case ErrorMsg:
 		m.applyError(msg)
+	case leaveFailedMsg:
+		m.applyError(ErrorMsg{Source: "leave", Err: msg.err})
+		return m, tea.Quit
 	case tea.KeyMsg:
 		return m, m.key(msg)
 	}
@@ -341,19 +344,40 @@ func (m *Model) flipAccess() tea.Cmd {
 // console does TO the session goes through this one path — it is the whole
 // write surface, and it only runs after a confirm.
 //
-// Deliberately synchronous. Handing the leases off and leaving the session is
-// the last thing this process does, so there is no frame after it worth keeping
-// responsive, and doing it as a background command would race the program's own
-// shutdown — the failure mode being a member who quit without handing anything
-// over.
+// It runs as a COMMAND, not inline in Update, and that is load-bearing rather
+// than stylistic. Update executes on bubbletea's event loop, which is the only
+// reader of an unbuffered message channel — and everything the quit action does
+// narrates through logx, which this console has diverted straight back into
+// that channel (see divert). A Send issued from inside Update has nobody to
+// receive it and never returns, so `y` used to wedge the whole screen and the
+// session was never left (TASK-15). Commands run on their own goroutine with
+// the event loop still draining behind them, so the same narration lands in the
+// log tab instead of deadlocking on it.
+//
+// The ordering the old synchronous call was protecting is kept: the QuitMsg is
+// this command's own RESULT, so the program cannot come down until the hand-off
+// has returned. What must not happen is `tea.Batch(quitAction, tea.Quit)` —
+// that is the race, and it would leave a member who quit without handing
+// anything over.
 func (m *Model) leave() tea.Cmd {
-	if m.opt.Quit != nil {
-		if err := m.opt.Quit(context.Background()); err != nil {
-			m.applyError(ErrorMsg{Source: "leave", Err: err})
-		}
+	quit := m.opt.Quit
+	if quit == nil {
+		return tea.Quit
 	}
-	return tea.Quit
+	return func() tea.Msg {
+		if err := quit(context.Background()); err != nil {
+			return leaveFailedMsg{err: err}
+		}
+		return tea.QuitMsg{}
+	}
 }
+
+// leaveFailedMsg carries a failed hand-off back to the event loop rather than
+// writing it into the model from the command's goroutine, which would be a data
+// race on every field View reads. It still ends the program: the console is
+// what holds the session open, and a member who asked to leave and was told
+// "no" would have nothing left to do with the screen.
+type leaveFailedMsg struct{ err error }
 
 // applyError folds one source's outcome in. Every source reports every tick, so
 // this is as much about clearing as about setting: a failure that stops
