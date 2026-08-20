@@ -57,6 +57,34 @@ func Env(extra ...string) []string {
 		"GIT_CONFIG_SYSTEM=/dev/null",
 		"GIT_TERMINAL_PROMPT=0",
 		"GIT_OPTIONAL_LOCKS=0",
+		// ⚠️ There is deliberately NO GIT_ALLOW_PROTOCOL here, and adding one is a
+		// net loss. It looks like free defence in depth against a URL that arrives
+		// over the wire; measured against the pinned git, it is the opposite.
+		//
+		// What it would close: nothing. git's own default policy for `ext` — the
+		// one transport that turns a URL into a shell — is NEVER, not "allowed
+		// unless GIT_PROTOCOL_FROM_USER says otherwise". `git clone 'ext::sh -c …'`
+		// against git 2.52 answers `fatal: transport 'ext' not allowed` with no
+		// config and no env at all. That is the layer we rely on. (`fd::` is NOT
+		// in the same class despite reading like it — it hands git a descriptor
+		// the caller already opened, is gated at `user` like `file`, and is not
+		// command execution.)
+		//
+		// What it would open: GIT_ALLOW_PROTOCOL is equivalent to protocol.allow=
+		// never plus protocol.<name>.allow=ALWAYS for each name listed — so listing
+		// `file` promotes it out of git's default `user` policy, which is what stops
+		// a file:// URL that did NOT come from the user (a submodule URL, an HTTP
+		// redirect) from being dialled. A member may publish an http:// endpoint,
+		// so a redirect to file:// is reachable by exactly the actor the finding
+		// was about. Listing a protocol to protect it is how you unprotect it.
+		//
+		// The invariant we actually depend on is git's default, so it is pinned by
+		// a test rather than by config: internal/git/protocol_test.go in the
+		// monorepo asserts a bundled-git `ext::` clone is refused AND does not run
+		// its command, and that `file` is still gated at `user`. A git bump that
+		// changed either goes red there. Full reasoning, including the ssh trap an
+		// allowlist would have sprung on the durability mirror:
+		// docs/security-findings/git-transport-injection.md.
 		"GIT_AUTHOR_NAME=" + HermeticIdentity.Name,
 		"GIT_AUTHOR_EMAIL=" + HermeticIdentity.Email,
 		"GIT_COMMITTER_NAME=" + HermeticIdentity.Name,
